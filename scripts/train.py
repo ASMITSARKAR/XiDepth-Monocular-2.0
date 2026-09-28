@@ -59,8 +59,12 @@ class Trainer:
 
         self.scaler = torch.amp.GradScaler("cuda", enabled=(args.use_amp and self.device.type == "cuda"))
         self.health_monitor = DisparityHealthMonitor(
-            min_std=args.min_disp_std,
-            max_consecutive_low_variance=args.max_consecutive_low_variance,
+            min_depth=args.min_depth,
+            max_depth=args.max_depth,
+            warmup_steps=args.warmup_steps,
+            dead_neuron_std_thresh=args.dead_neuron_std_thresh,
+            max_consecutive_collapse=args.max_consecutive_collapse,
+            fail_on_collapse=args.fail_on_collapse,
         )
 
         self._setup_datasets()
@@ -243,10 +247,12 @@ class Trainer:
 
             if (batch_idx + 1) % self.args.log_freq == 0:
                 elapsed = time.time() - start_time
+                depth_m = loss_dict.get("depth_mean", 0.0)
+                depth_s = loss_dict.get("depth_std", 0.0)
                 print(
                     f"Epoch [{epoch+1}/{self.args.epochs}] Step [{batch_idx+1}/{len(self.train_loader)}] "
-                    f"Loss: {loss.item():.4f} | Disp std: {loss_dict['disp_std']:.4f} | "
-                    f"Time: {elapsed:.1f}s"
+                    f"Loss: {loss.item():.4f} | Depth: {depth_m:.1f}m ± {depth_s:.1f}m | "
+                    f"Disp std: {loss_dict.get('disp_std', 0.0):.5f} | Time: {elapsed:.1f}s"
                 )
 
         return sum(epoch_losses) / len(epoch_losses)
@@ -329,8 +335,10 @@ def get_args():
     parser.add_argument("--max_depth", type=float, default=100.0)
     parser.add_argument("--smoothness_weight", type=float, default=0.001)
 
-    parser.add_argument("--min_disp_std", type=float, default=0.005)
-    parser.add_argument("--max_consecutive_low_variance", type=int, default=5)
+    parser.add_argument("--warmup_steps", type=int, default=1000)
+    parser.add_argument("--dead_neuron_std_thresh", type=float, default=1e-6)
+    parser.add_argument("--max_consecutive_collapse", type=int, default=100)
+    parser.add_argument("--fail_on_collapse", action="store_true", default=False)
 
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--use_amp", action="store_true", default=True)

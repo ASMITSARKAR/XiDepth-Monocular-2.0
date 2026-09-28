@@ -30,8 +30,10 @@ class TrainingConfig:
     use_automask: bool = True
 
     # Health monitor thresholds
-    min_disp_std: float = 0.005
-    max_allowed_consecutive_low_variance: int = 5
+    warmup_steps: int = 1000
+    dead_neuron_std_thresh: float = 1e-6
+    max_consecutive_collapse: int = 100
+    fail_on_collapse: bool = False
 
 
 @dataclass
