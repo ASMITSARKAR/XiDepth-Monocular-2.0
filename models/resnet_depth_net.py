@@ -58,9 +58,6 @@ class DepthDecoder(nn.Module):
 
         self.upconv1 = ConvBlock(32 + 64, 16)
         self.iconv1 = Conv3x3(16, 16)
-
-        self.upconv0 = ConvBlock(16, 16)
-        self.iconv0 = Conv3x3(16, 16)
         self.disp1 = nn.Sequential(nn.Conv2d(16, 1, 3, padding=1), nn.Sigmoid())
 
         for disp_head in [self.disp1, self.disp2, self.disp3, self.disp4]:
@@ -90,10 +87,7 @@ class DepthDecoder(nn.Module):
         concat1 = torch.cat([iconv2, f0], dim=1)
         up1 = F.interpolate(concat1, scale_factor=2, mode="nearest")
         iconv1 = self.iconv1(self.upconv1(up1))
-
-        up0 = F.interpolate(iconv1, scale_factor=2, mode="nearest")
-        iconv0 = self.iconv0(self.upconv0(up0))
-        disp1 = self.disp1(iconv0)  # full resolution (1x)
+        disp1 = self.disp1(iconv1)  # full resolution (1x)
 
         return [disp1, disp2, disp3, disp4]
 
