@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing and caching
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Model checkpoints and logs
+checkpoints/
+runs/
+*.pth
+*.pt
+
+# Datasets and raw archives (keep sample test data only)
+data/kitti/
+data/raw/
+*.tar.gz
+*.tar
+*.zip
+*.npz
+
+# Environments and IDE
+.env
+.venv
+venv/
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
+# System files
+.DS_Store
+Thumbs.db
