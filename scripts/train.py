@@ -336,7 +336,7 @@ def get_args():
     parser.add_argument("--use_amp", action="store_true", default=True)
     parser.add_argument("--no_cuda", action="store_true", default=False)
     parser.add_argument("--log_freq", type=int, default=50)
-    parser.add_argument("--save_freq", type=int, default=5)
+    parser.add_argument("--save_freq", type=int, default=1)
 
     return parser.parse_args()
 
