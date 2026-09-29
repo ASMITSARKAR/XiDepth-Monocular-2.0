@@ -105,3 +105,13 @@ class DisparityHealthMonitor:
                 "depth_min": depth_min,
                 "depth_max": depth_max,
             }
+
+    def state_dict(self) -> Dict[str, int]:
+        return {
+            "step_count": self.step_count,
+            "consecutive_collapse_batches": self.consecutive_collapse_batches,
+        }
+
+    def load_state_dict(self, state: Dict[str, int]):
+        self.step_count = state.get("step_count", 0)
+        self.consecutive_collapse_batches = state.get("consecutive_collapse_batches", 0)

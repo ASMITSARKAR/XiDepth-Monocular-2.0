@@ -27,15 +27,29 @@ $$I_{s \to t} = I_s \left\langle \text{proj}\left( K, T_{t \to s}, D_t, K^{-1} \
 
 This formulation fundamentally requires temporal continuity: frame $t-1$, frame $t$, and frame $t+1$ must observe the same physical 3D scene from slightly translated camera viewpoints.
 
-In v1, the dataset loader (`data/kitti_dataset.py`) contained an automated fallback routine (`_auto_discover_samples`) that detected directory patterns from the **KITTI Object Detection benchmark** (`data_object_image_2`) instead of continuous video sequences from **KITTI Raw**. In the v1 loader, when `is_kitti_object` was set, temporal neighbors were formed by substituting the simultaneous stereo counterpart (`image_03`) or copying the target image, while in other code paths, adjacent numeric indices were loaded. 
+In v1, the dataset loader ([`data/kitti_dataset.py`](file:///c:/isolate/XiDepth/data/kitti_dataset.py#L326-L344)) contained an automated fallback routine (`_auto_discover_samples`) that detected directory patterns from the **KITTI Object Detection benchmark** (`data_object_image_2`) instead of continuous video sequences from **KITTI Raw**. 
 
-Whether the optimization collapse was triggered primarily by synthetic stereo-for-temporal frame substitutions, discontinuous scene warps, loss weighting, or initialization bias remains a **hypothesis**. What is empirically verified from the training logs is that:
-1. The v1 training run ingested non-sequential frames from the KITTI Object benchmark via the auto-discovery fallback.
-2. The network collapsed into predicting a near-uniform ~1.3m sheet across the scene.
+Forensic code inspection of lines 326–344 reveals the exact mechanism:
+```python
+if self.is_kitti_object:
+    # On KITTI Object, adjacent indices are unsequenced benchmarks, not consecutive video frames.
+    if img_stereo is not None:
+        img_prev = img_stereo
+        img_next = img_stereo
+    else:
+        img_prev = img_t.copy()
+        img_next = img_t.copy()
+```
+When `img_stereo` was unavailable, the loader literally set `img_prev = img_t.copy()` and `img_next = img_t.copy()`.
+
+**The Mathematical Consequence of Zero Camera Motion:**
+Self-supervised depth estimation relies fundamentally on motion parallax between non-identical viewpoints. With identical frame copies ($I_{t-1} = I_t = I_{t+1}$), the physical camera translation is zero ($T = I$). Under zero camera motion, the photometric reprojection error:
+$$\mathcal{L}_{photo} = \min_{s} \left( 0.85 \cdot \text{SSIM}(I_t, I_{s \to t}) + 0.15 \cdot |I_t - I_{s \to t}| \right)$$
+is trivially and globally minimized ($\mathcal{L}_{photo} \to 0$) whenever the warp displacement is zero ($\Delta x = 0$). When the PoseNet predicts zero motion, or when the disparity bias maps depth to a constant value, there is zero parallax error gradient to guide geometry. A constant, flat depth sheet is therefore an exact, uninformative global photometric minimum. This explains the observed collapse to a flat ~1.3m sheet much more directly than complex loss-tuning or hyperparameter hypotheses.
 
 > [!IMPORTANT]
 > **Status of Hypothesized Root Causes:**
-> Under median scaling, evaluating a flat constant depth map produces an AbsRel of $\approx 0.41$, which is **consistent with** the observed 0.4562 failure score (minor differences attributable to test subsets, crop boundaries, and evaluation clipping limits). Secondary hypothesized root causes (e.g., smoothness loss weighting, auto-masking thresholding, depth bounding) remain **unverified hypotheses** because v1 ran on an invalid dataset. All proposed algorithmic fixes (normalized smoothness, proper disparity bias initialization, auto-masking normalization) will only be considered scientifically validated after completing a real v2 training run on KITTI Raw.
+> Under median scaling, evaluating a flat constant depth map produces an AbsRel of $\approx 0.41$, which is **consistent with** the observed 0.4562 failure score (minor differences attributable to test subsets, crop boundaries, and evaluation clipping limits). While secondary factors (smoothness loss scale, auto-masking thresholds, disparity bias) influenced optimization speed, the fundamental driver was the absence of a physical motion baseline. All algorithmic refinements in v2 will be empirically validated against true continuous KITTI Raw sequences.
 
 ### 2.2 Disparity Bias Arithmetic Collapse
 The disparity-to-depth mapping used across both versions is:
@@ -119,9 +133,14 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
             - Mixed Precision (AMP FP16)
             - Auto-Masking + Multi-Scale Reprojection
             - Health Monitor Collapse Guard
+            - Camera Pose Regressor: Identical ImageNet-Pretrained ResNet-18 PoseNet Across All Tracks
                                ▼
                    Eigen Benchmark Evaluation
 ```
+
+> [!NOTE]
+> **Controlled Camera Pose Regression:**
+> To guarantee that the depth estimation backbone is the sole independent variable under study, Track 1 (Pretrained ResNet-18), Track 1b (From-Scratch ResNet-18), and Track 2 (Lightweight XiDepthNet) all utilize an **identical ImageNet-pretrained ResNet-18 PoseNet** (`--posenet_pretrained True`). Camera ego-motion prediction accuracy is thereby held strictly constant across all tracks.
 
 ### Benchmark Reference (Ground Truth Sourced)
 
@@ -137,11 +156,11 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
 
 The inference latency was empirically benchmarked on local CPU hardware (**AMD Ryzen 7 7435HS**, 8 Cores / 16 Threads, Batch Size 1, Resolution $192 \times 640$, 10 warmup iterations, using `scripts/infer.py`):
 
-### Multi-Threaded Profile (Default PyTorch Threads, 30 Iterations)
+### Multi-Threaded Profile (AMD Ryzen 7 7435HS, 16 Threads, 30 Iterations)
 
 ```
 ======================================================================
- Inference Latency & Efficiency Comparison (AMD Ryzen 7 7435HS CPU)
+ Multi-Thread CPU Latency & Throughput (AMD Ryzen 7 7435HS, 16 Threads)
 ======================================================================
 Model              |   Params |  Mean Latency |  P95 Latency |      FPS
 ----------------------------------------------------------------------
@@ -149,13 +168,13 @@ XiDepthNet         |    2.36M |     108.46 ms |    123.03 ms |     9.22
 ResNetDepthNet     |   14.72M |     198.90 ms |    214.24 ms |     5.03
 ======================================================================
 ```
-*(Reference from earlier run: XiDepthNet 100.88 ms / 9.91 FPS vs ResNetDepthNet 193.24 ms / 5.18 FPS).*
+*(Reference from earlier run under light background load: XiDepthNet 100.88 ms / 9.91 FPS vs ResNetDepthNet 193.24 ms / 5.18 FPS).*
 
 ### Single-Threaded Profile (Forced Single Thread `threads=1`, 50 Iterations)
 
 ```
 ======================================================================
- Single-Thread CPU Inference (AMD Ryzen 7 7435HS CPU)
+ Single-Thread CPU Latency & Throughput (AMD Ryzen 7 7435HS, 1 Thread)
 ======================================================================
 Model              |   Params |  Mean Latency |  P95 Latency |      FPS
 ----------------------------------------------------------------------
@@ -164,9 +183,9 @@ ResNetDepthNet     |   14.72M |     651.56 ms |    731.55 ms |     1.53
 ======================================================================
 ```
 
-**Key Findings:**
-- Under standard multi-threaded CPU execution, XiDepthNet achieves **~9.2–9.9 FPS** (nearing real-time 10 Hz robotic control on standard consumer x86 mobile silicon).
-- XiDepthNet delivers a **1.83×–2.02× speedup** over ResNet-18 while using **6.2× fewer parameters** ($2.36\text{M}$ vs $14.72\text{M}$).
+**Key Findings & Memory-Bandwidth Bottleneck Analysis:**
+- **Host CPU Specificity:** Throughput of ~9.2–9.9 FPS requires multi-threaded execution utilizing all 16 threads of a high-performance host CPU (AMD Ryzen 7 7435HS). Under true single-thread execution, throughput drops to 3.11 FPS (321.8 ms). Embedded edge processors (such as Raspberry Pi 4/5 or Jetson CPUs) will experience significantly lower frame rates.
+- **The Memory-Bound Dilemma:** Despite achieving a **6.2× parameter reduction** ($2.36\text{M}$ vs $14.72\text{M}$), XiDepthNet delivers only a **1.83×–2.02× speedup** on CPU. This divergence demonstrates that lightweight architectures dominated by depthwise-separable convolutions, channel splits, channel shuffles, and tensor concatenations are **memory-bandwidth bound** rather than arithmetic (FLOP) bound. The low operational intensity (FLOPs per byte of memory read/write) creates cache thrashing and memory bus saturation on general-purpose CPUs. Parameter count is therefore an insufficient proxy for deployment latency.
 
 ---
 

@@ -41,7 +41,7 @@ class Trainer:
         else:
             raise ValueError(f"Unknown model: {args.model}")
 
-        self.pose_net = PoseNet(num_input_images=2, pretrained=args.pretrained)
+        self.pose_net = PoseNet(num_input_images=2, pretrained=args.posenet_pretrained)
 
         self.depth_net.to(self.device)
         self.pose_net.to(self.device)
@@ -82,8 +82,17 @@ class Trainer:
                 self.optimizer.load_state_dict(ckpt["optimizer"])
             if "scheduler" in ckpt and self.scheduler is not None:
                 self.scheduler.load_state_dict(ckpt["scheduler"])
+            if "scaler" in ckpt and self.scaler.is_enabled():
+                self.scaler.load_state_dict(ckpt["scaler"])
+            if "health_monitor" in ckpt and self.health_monitor is not None:
+                self.health_monitor.load_state_dict(ckpt["health_monitor"])
+            if "best_val_loss" in ckpt:
+                self.best_val_loss = ckpt["best_val_loss"]
             self.start_epoch = ckpt.get("epoch", 0) + 1
-            print(f"Resumed from epoch {self.start_epoch}")
+            print(
+                f"Resumed from epoch {self.start_epoch} (step_count: {self.health_monitor.step_count}, "
+                f"best_val_loss: {self.best_val_loss:.4f})"
+            )
 
     def _setup_datasets(self):
         train_file = os.path.join(self.args.split_dir, "train_files.txt")
@@ -290,6 +299,9 @@ class Trainer:
             "pose_net": self.pose_net.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict() if self.scaler.is_enabled() else {},
+            "health_monitor": self.health_monitor.state_dict(),
+            "best_val_loss": self.best_val_loss,
             "args": vars(self.args),
         }
         ckpt_path = os.path.join(self.args.checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pth")
@@ -323,7 +335,8 @@ class Trainer:
 def get_args():
     parser = argparse.ArgumentParser(description="XiDepth v2.0 Training Pipeline")
     parser.add_argument("--model", type=str, default="xidepth", choices=["xidepth", "resnet18"])
-    parser.add_argument("--pretrained", action="store_true", default=False, help="Use ImageNet pretrained weights")
+    parser.add_argument("--pretrained", action="store_true", default=False, help="Use ImageNet pretrained weights for DepthNet")
+    parser.add_argument("--posenet_pretrained", action="store_true", default=True, help="ImageNet pretrained weights for PoseNet (default: True across all tracks)")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth to resume from")
     parser.add_argument("--num_scales", type=int, default=4)
     parser.add_argument("--disp_bias_init", type=float, default=-4.5)

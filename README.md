@@ -2,34 +2,36 @@
 
 XiDepth-Monocular v2.0 is a self-supervised monocular depth estimation pipeline trained on continuous temporal video sequences from the KITTI Raw dataset.
 
-The project investigates whether a lightweight, depthwise-separable architecture with channel shuffle (XiBlock) can achieve competitive spatial accuracy compared to standard ResNet-18 baselines while drastically reducing computational overhead for resource-constrained robotics and edge platforms.
+The project investigates whether a lightweight, depthwise-separable architecture with channel shuffle (XiBlock) can achieve competitive spatial accuracy compared to standard ResNet-18 baselines while reducing computational overhead.
 
 ---
 
 ## 1. Architectural Overview & Efficiency Benchmark
 
 The repository features a dual-track experimental architecture:
-- **Track 1 (ResNet-18 Baseline):** 14.7M parameters. Standard supervised/self-supervised reference architecture.
+- **Track 1 (ResNet-18 Baseline):** 14.7M parameters. Standard reference architecture.
 - **Track 2 (XiDepthNet Novel Backbone):** 2.36M parameters (6.2x smaller). Uses ShuffleNetV2-inspired XiBlocks with channel split, depthwise-separable convolutions, and channel shuffling.
 
-### Measured Inference Benchmarks (AMD Ryzen 7 CPU, batch size = 1, resolution = 640x192)
+### Measured Inference Benchmarks (AMD Ryzen 7 7435HS CPU, batch size = 1, resolution = 640x192)
 
-| Architecture | Parameters | CPU Latency (Mean) | CPU Latency (P95) | Throughput (FPS) | Parameter Reduction |
+| Architecture | Parameters | Multi-Thread Latency (16 Threads) | Multi-Thread FPS | Single-Thread Latency (1 Thread) | Single-Thread FPS |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **ResNetDepthNet** (Baseline) | 14.72 M | 193.2 ms | 208.1 ms | 5.18 FPS | Reference (1.0x) |
-| **XiDepthNet** (Lightweight) | **2.36 M** | **100.9 ms** | **119.2 ms** | **9.91 FPS** | **6.2x smaller** |
+| **ResNetDepthNet** (Baseline) | 14.72 M | 198.9 ms (P95: 214.2) | 5.03 FPS | 651.6 ms (P95: 731.6) | 1.53 FPS |
+| **XiDepthNet** (Lightweight) | **2.36 M** | **108.5 ms** (P95: 123.0) | **9.22 FPS** | **321.8 ms** (P95: 363.6) | **3.11 FPS** |
+
+*Hardware Profiling & Memory Bottleneck Note:* Achieving ~9.2–9.9 FPS requires multi-threaded execution utilizing all 16 threads of a Ryzen 7 7435HS host CPU. While parameter count is reduced by 6.2x, CPU speedup is ~1.8–2.0x due to memory-bandwidth bottlenecks in depthwise convolutions and channel shuffles.
 
 ---
 
-## 2. Target Eigen Benchmark Metrics
+## 2. Benchmark Reference Metrics
 
-Evaluated on the standard 697 test images of the KITTI Eigen split with Garg crop (capped at 80m) and per-image median ground-truth scaling:
+Evaluated on the KITTI Eigen split with per-image median ground-truth scaling:
 
-| Architecture | Backbone | Params | Abs Rel (lower) | Sq Rel (lower) | RMSE (lower) | d < 1.25 (higher) | d < 1.25^2 (higher) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| MonoDepth2 (Official) | ResNet-18 | 14.3 M | 0.115 | 0.903 | 4.863 | 0.877 | 0.959 |
-| XiDepth v2 (Track 1 Baseline) | ResNet-18 | 14.7 M | 0.118 | 0.920 | 4.950 | 0.870 | 0.955 |
-| XiDepth v2 (Track 2 Novel) | XiBlock | **2.36 M** | **0.132** | **1.050** | **5.320** | **0.845** | **0.940** |
+| Architecture | Backbone | Params | Abs Rel (Raw 697, Garg crop) | Abs Rel (Improved 652, Benchmark) | Sq Rel | RMSE | $\delta < 1.25$ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **MonoDepth2 (Godard et al.)** | ResNet-18 | 14.3 M | 0.115 | 0.090 | 0.903 | 4.863 | 0.877 |
+
+*Note: All XiDepth empirical evaluation rows remain empty until execution on Kaggle.*
 
 ---
 
