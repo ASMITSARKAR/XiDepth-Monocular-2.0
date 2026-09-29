@@ -9,17 +9,22 @@ The project investigates whether a lightweight, depthwise-separable architecture
 ## 1. Architectural Overview & Efficiency Benchmark
 
 The repository features a dual-track experimental architecture:
-- **Track 1 (ResNet-18 Baseline):** 14.7M parameters. Standard reference architecture.
-- **Track 2 (XiDepthNet Novel Backbone):** 2.36M parameters (6.2x smaller). Uses ShuffleNetV2-inspired XiBlocks with channel split, depthwise-separable convolutions, and channel shuffling.
+- **Track 1 (ResNet-18 Baseline):** 14.72M parameters (depth network). Standard reference architecture.
+- **Track 2 (XiDepthNet Novel Backbone):** 2.36M parameters (depth network, 6.2x parameter reduction). Uses ShuffleNetV2-inspired XiBlocks with channel split, depthwise-separable convolutions, and channel shuffling.
+*(Note: Parameter reduction ratio applies strictly to DepthNet; the 12.96M ResNet-18 PoseNet is used during training only and discarded at inference).*
 
 ### Measured Inference Benchmarks (AMD Ryzen 7 7435HS CPU, batch size = 1, resolution = 640x192)
 
-| Architecture | Parameters | Multi-Thread Latency (16 Threads) | Multi-Thread FPS | Single-Thread Latency (1 Thread) | Single-Thread FPS |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **ResNetDepthNet** (Baseline) | 14.72 M | 198.9 ms (P95: 214.2) | 5.03 FPS | 651.6 ms (P95: 731.6) | 1.53 FPS |
-| **XiDepthNet** (Lightweight) | **2.36 M** | **108.5 ms** (P95: 123.0) | **9.22 FPS** | **321.8 ms** (P95: 363.6) | **3.11 FPS** |
+| Architecture | Params (DepthNet) | GMACs / FLOPs | Single-Thread Latency (100 runs, mean ± std) | Single-Thread FPS | Multi-Thread Latency (16 Threads) | Multi-Thread FPS |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **ResNetDepthNet** (Baseline) | 14.72 M | 6.49 GMACs (12.98 GFLOPs) | 671.5 ± 50.4 ms | 1.49 FPS | 198.9 ms | 5.03 FPS |
+| **Official MonoDepth2** (Reference) | 14.33 M | 4.01 GMACs (8.01 GFLOPs) | 372.1 ± 26.0 ms | 2.69 FPS | — | — |
+| **XiDepthNet** (Lightweight) | **2.36 M** | **2.58 GMACs (5.17 GFLOPs)** | **306.1 ± 23.0 ms** | **3.27 FPS** | **108.5 ms** | **9.22 FPS** |
 
-*Hardware Profiling & Memory Bottleneck Note:* Achieving ~9.2–9.9 FPS requires multi-threaded execution utilizing all 16 threads of a Ryzen 7 7435HS host CPU. While parameter count is reduced by 6.2x, CPU speedup is ~1.8–2.0x due to memory-bandwidth bottlenecks in depthwise convolutions and channel shuffles.
+*Compute vs. Latency Analysis:*
+- Relative to ResNetDepthNet, XiDepthNet achieves a **2.51× GMAC reduction** and a **2.19× single-thread latency reduction** (1.83× multi-thread), leaving only a ~1.15× gap between compute reduction and latency reduction (cause under investigation).
+- Module-level profiling reveals that **the UNet decoder accounts for 95.8% of XiDepthNet's total compute** (2.48 of 2.58 GMACs), running dense 3×3 convolutions at high spatial resolutions. Depthwise convolutions account for only 0.2% of MACs, and channel shuffle / tensor concatenations account for ≤0.3% of execution time.
+- Embedded edge processors (such as Raspberry Pi or Jetson CPU cores) will experience substantially lower throughput than the host AMD Ryzen 7 7435HS.
 
 ---
 
