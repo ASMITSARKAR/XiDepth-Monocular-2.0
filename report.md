@@ -129,11 +129,8 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
 | Architecture | Backbone | Parameters | Abs Rel (Raw 697, Garg crop) | Abs Rel (Improved 652, Benchmark) | Sq Rel | RMSE | $\delta < 1.25$ |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **MonoDepth2 (Godard et al.)** | ResNet-18 | 14.3 M | 0.115 | 0.090 | 0.903 | 4.863 | 0.877 |
-| **XiDepth v2 Track 1 (Pretrained)** | ResNet-18 | 14.7 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
-| **XiDepth v2 Track 1b (From-Scratch)** | ResNet-18 | 14.7 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
-| **XiDepth v2 Track 2 (Lightweight)** | XiBlock | 2.36 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
 
-*Note on Evaluation Protocol:* Post-processing is disabled by default for baseline comparisons. When evaluating against improved ground truth (652 frames), evaluation is performed over all valid pixels without cropping ($10^{-3} < d < 80\,\text{m}$); when evaluating against raw LiDAR (697 frames), the standard Garg crop is applied.
+*Note on Evaluation Protocol:* Post-processing is disabled by default for baseline comparisons. When evaluating against improved ground truth (652 frames), evaluation is performed over all valid pixels without cropping ($10^{-3} < d < 80\,\text{m}$); when evaluating against raw LiDAR (697 frames), the standard Garg crop is applied. All XiDepth evaluation rows remain empty until empirical evaluation is executed on Kaggle.*
 
 ---
 
