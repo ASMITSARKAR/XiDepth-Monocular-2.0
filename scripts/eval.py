@@ -49,15 +49,24 @@ def evaluate(args):
     print(f"Evaluation running on: {device}")
 
     # Model initialization
-    if args.model == "monodepth2_official":
+    if args.model in ("monodepth2", "monodepth2_official"):
         model = OfficialMonodepth2()
         ckpt_dir = args.checkpoint if (args.checkpoint and os.path.isdir(args.checkpoint)) else "checkpoints/monodepth2_official"
         enc_path = os.path.join(ckpt_dir, "encoder.pth")
         dec_path = os.path.join(ckpt_dir, "depth.pth")
-        if not os.path.isfile(enc_path) or not os.path.isfile(dec_path):
-            raise FileNotFoundError(f"Missing official weights in {ckpt_dir} (expected encoder.pth and depth.pth)")
-        model.load_pretrained(enc_path, dec_path)
-        print(f"Loaded official Monodepth2 weights from: {ckpt_dir}")
+        if os.path.isfile(enc_path) and os.path.isfile(dec_path):
+            model.load_pretrained(enc_path, dec_path)
+            print(f"Loaded official Monodepth2 weights from: {ckpt_dir}")
+        elif args.checkpoint and os.path.isfile(args.checkpoint):
+            checkpoint = torch.load(args.checkpoint, map_location=device)
+            state_dict = checkpoint["depth_net"] if "depth_net" in checkpoint else checkpoint
+            model.load_state_dict(state_dict)
+            print(f"Loaded checkpoint from: {args.checkpoint}")
+        else:
+            raise FileNotFoundError(
+                f"Missing weights for monodepth2. Expected directory with encoder.pth/depth.pth "
+                f"or checkpoint .pth file, got: {args.checkpoint}"
+            )
     elif args.model == "xidepth":
         model = XiDepthNet(num_scales=4)
         if args.checkpoint and os.path.isfile(args.checkpoint):
@@ -258,7 +267,7 @@ def evaluate(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate XiDepth models on KITTI Eigen test benchmark")
-    parser.add_argument("--model", type=str, default="xidepth", choices=["xidepth", "resnet18", "monodepth2_official"])
+    parser.add_argument("--model", type=str, default="xidepth", choices=["xidepth", "resnet18", "monodepth2", "monodepth2_official"])
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--dataset_dir", type=str, default="data/kitti")
     parser.add_argument("--split_file", type=str, default="data/splits/eigen_benchmark/test_files.txt")

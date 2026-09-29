@@ -58,7 +58,7 @@ With $\mathcal{L}_{photo} = 0$ exerting zero counteracting force and $\mathcal{L
 
 > [!IMPORTANT]
 > **Status of Hypothesized Root Causes:**
-> Under per-image median ground-truth scaling, evaluating a flat constant depth map against the KITTI Eigen test set produces an AbsRel of $\approx \mathbf{0.410}$. This mathematically accounts for the observed 0.4562 failure score (minor difference due to crop boundaries and evaluation clipping). The fundamental failure mechanism was the total absence of physical motion parallax, not complex loss weight imbalances.
+> Under per-image median ground-truth scaling, evaluating a flat constant depth map against the 652-frame improved ground-truth test set produces an AbsRel of $\approx \mathbf{0.410}$, which is **consistent with** the observed 0.4562 failure score (minor differences attributable to test subsets, crop boundaries, and evaluation clipping limits). The fundamental failure mechanism was the total absence of physical motion parallax, not complex loss weight imbalances.
 
 ### 2.2 Disparity Bias Arithmetic Collapse
 The disparity-to-depth mapping used across both versions is:
@@ -119,44 +119,45 @@ Because multiplying disparity by a scalar does not change $d^*$, the smoothness 
 
 ---
 
-## 4. Dual-Track Experimental Design
+## 4. Multi-Track Experimental Design
 
-To isolate backbone performance from pipeline correctness, v2 adopts a dual-track experimental structure:
+To isolate backbone performance from pipeline correctness, v2 adopts a rigorous multi-track experimental structure:
 
 ```
                       KITTI Raw Eigen Split
-                               │
-            ┌──────────────────┴──────────────────┐
-            ▼                                     ▼
-     Track 1 (Control)                    Track 2 (Novel)
-    ResNet-18 Baseline                   XiDepthNet Backbone
-     14.72M parameters                    2.35M parameters
-   ImageNet Pretrained                  Edge-Optimized XiBlocks
-            │                                     │
-            └──────────────────┬──────────────────┘
-                               ▼
-                   Identical Training Setup:
-            - Dataset: Official Eigen-Zhou (39,810 train: 19,956 L / 19,854 R; 4,424 val)
-            - 20 Epochs, Batch Size 12 (3,318 steps/epoch, 66,360 total steps)
-            - 1,000-step Warmup (0.30 epochs)
-            - Mixed Precision (AMP FP16)
-            - Auto-Masking + Multi-Scale Reprojection
-            - Health Monitor Collapse Guard
-            - Camera Pose Regressor: Identical ImageNet-Pretrained ResNet-18 PoseNet Across All Tracks
-                               ▼
-                   Eigen Benchmark Evaluation
+                                │
+             ┌──────────────────┼──────────────────┐
+             ▼                  ▼                  ▼
+      Track 1 (Baseline) Track 1b (Control)  Track 2 (Novel)
+     Official MonoDepth2  Official Scratch   XiDepthNet Backbone
+      14.33M parameters   14.33M parameters   2.36M parameters
+         8.01 GMACs          8.01 GMACs          5.17 GMACs
+     ImageNet Pretrained    From Scratch      Edge-Optimized XiBlocks
+             │                  │                  │
+             └──────────────────┼──────────────────┘
+                                ▼
+                    Identical Training Setup:
+             - Dataset: Official Eigen-Zhou (39,810 train: 19,956 L / 19,854 R; 4,424 val)
+             - 20 Epochs, Batch Size 12 (3,318 steps/epoch, 66,360 total steps)
+             - 1,000-step Warmup (0.30 epochs)
+             - Mixed Precision (AMP FP16)
+             - Auto-Masking + Multi-Scale Reprojection
+             - Health Monitor Collapse Guard
+             - Camera Pose Regressor: Identical ImageNet-Pretrained ResNet-18 PoseNet Across All Tracks
+                                ▼
+                    Eigen Benchmark Evaluation
 ```
 
 > [!NOTE]
 > **Controlled Camera Pose Regression & Parameter Accounting:**
-> - To guarantee that the depth estimation backbone is the sole independent variable under study, Track 1 (Pretrained ResNet-18), Track 1b (From-Scratch ResNet-18), and Track 2 (Lightweight XiDepthNet) all utilize an **identical ImageNet-pretrained ResNet-18 PoseNet** (`--posenet_pretrained True`). Camera ego-motion prediction accuracy is thereby held strictly constant across all tracks.
-> - **Parameter Accounting:** The 6.2× parameter reduction (2.36M vs 14.72M) applies **strictly to DepthNet**. The 12.96M ResNet-18 PoseNet is used during training only to regress inter-frame camera motion and is discarded at inference time.
+> - To guarantee that the depth estimation backbone is the sole independent variable under study, Track 1 (Pretrained Official MonoDepth2), Track 1b (From-Scratch Official MonoDepth2), and Track 2 (Lightweight XiDepthNet) all utilize an **identical ImageNet-pretrained ResNet-18 PoseNet** (`--posenet_pretrained True`). Camera ego-motion prediction accuracy is thereby held strictly constant across all tracks.
+> - **Parameter Accounting:** The 6.1× parameter reduction (2.36M vs 14.33M) applies **strictly to DepthNet**. The 12.96M ResNet-18 PoseNet is used during training only to regress inter-frame camera motion and is discarded at inference time.
 
 ### Benchmark Reference (Ground Truth Sourced)
 
 | Architecture | Backbone | Parameters | Abs Rel (Raw 697, Garg crop) | Abs Rel (Improved 652, Benchmark) | Sq Rel | RMSE | $\delta < 1.25$ |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **MonoDepth2 (Godard et al.)** | ResNet-18 | 14.3 M | 0.115 | 0.090 | 0.903 | 4.863 | 0.877 |
+| **MonoDepth2 (Godard et al.)** | ResNet-18 | 14.33 M | 0.115 | 0.090 | 0.903 | 4.863 | 0.877 |
 
 *Note on Evaluation Protocol:* Post-processing is disabled by default for baseline comparisons. When evaluating against improved ground truth (652 frames), evaluation is performed over all valid pixels without cropping ($10^{-3} < d < 80\,\text{m}$); when evaluating against raw LiDAR (697 frames), the standard Garg crop is applied. All XiDepth evaluation rows remain empty until empirical evaluation is executed on Kaggle.*
 
@@ -164,57 +165,57 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
 
 ## 5. Computational Complexity and Local Hardware Profiling
 
-To resolve discrepancies regarding computational complexity (FLOPs/GMACs) and determine whether execution latency is constrained by compute or memory bandwidth, detailed profiling was conducted using `fvcore`, `ptflops`, and PyTorch Profiler across all models.
+To establish precise computational benchmarks, profiling was conducted using `fvcore` (counting multiply-accumulates directly) and PyTorch Profiler across all models at resolution $192 \times 640$ (batch size 1).
 
-### 5.1 GMAC Cross-Check and Literature Alignment
+### 5.1 Multiply-Accumulate (MAC) Benchmarks & Baseline Resolution
 
-Literature on lightweight depth estimation (e.g., Lite-Mono, Monodepth2) commonly reports Monodepth2 at $\approx 8\text{ GFLOPs}$. Cross-checking model definitions clarifies this figure:
+Literature on lightweight depth estimation (e.g., Lite-Mono, MonoDepth2) reports MonoDepth2 at $\approx 8\text{ G MACs}$. An analytical count confirms this: standard ResNet-18 requires $1.81\text{ GMACs}$ at $224\times 224$, which scales to $\approx 4.44\text{ GMACs}$ at $192 \times 640$.
 
-| Model Architecture | Total Params | Total GFLOPs | Total GMACs | Encoder Compute | Decoder Compute | Convolutions per Scale |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Official MonoDepth2** | 14.33 M | **8.01 G** | **4.01 G** | 4.45 GFLOPs (55.6%) | 3.56 GFLOPs (44.4%) | 2 convs (`upconv.0`, `upconv.1`) |
-| **ResNetDepthNet** (Baseline) | 14.72 M | **12.98 G** | **6.49 G** | 4.45 GFLOPs (34.3%) | 8.53 GFLOPs (65.7%) | 3 convs (`ConvBlock` + `iconv`) |
-| **XiDepthNet** (Novel) | **2.36 M** | **5.17 G** | **2.58 G** | **0.22 GFLOPs (4.2%)** | **4.95 GFLOPs (95.8%)** | 3 convs (`ConvBlock` + `iconv`) |
+| Model Architecture | Total Params | Total GMACs | Encoder MACs | Decoder MACs | Convolutions per Scale |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Official MonoDepth2** (Primary Baseline) | 14.33 M | **8.01 G** | 4.45 GMACs (55.6%) | 3.56 GMACs (44.4%) | 2 convs (`upconv.0`, `upconv.1`) |
+| **XiDepthNet** (Novel) | **2.36 M** | **5.17 G** | **0.22 GMACs (4.2%)** | **4.95 GMACs (95.8%)** | 3 convs (`ConvBlock` + `iconv`) |
+| *ResNetDepthNet* (Heavy Decoder Extra) | 14.72 M | **12.98 G** | 4.45 GMACs (34.3%) | 8.53 GMACs (65.7%) | 3 convs (`ConvBlock` + `iconv`) |
 
 *Key Findings:*
-1. **Literature Alignment:** Official Monodepth2 operates at 8.01 GFLOPs (4.01 GMACs). The higher compute of `ResNetDepthNet` (12.98 GFLOPs) arises because its UNet decoder employs 3 convolutions per scale (`ConvBlock` with 2 convs plus an `iconv` conv) rather than 2, adding ~5 GFLOPs at high spatial resolutions ($192\times 640$ and $96\times 320$).
+1. **The True Baseline:** The official MonoDepth2 reference costs **8.01 GMACs**. `ResNetDepthNet` costs **12.98 GMACs** because its UNet decoder employs 3 convolutions per scale rather than 2, adding $\sim 5\text{ GMACs}$ at high spatial resolutions ($192\times 640$ and $96\times 320$). The valid literature comparison is therefore against **Official MonoDepth2 (8.01 GMACs)**.
 2. **Compute Reduction Factors:**
-   - Compared to `ResNetDepthNet` (12.98 GFLOPs): XiDepthNet reduces compute by **$2.51\times$** (from 6.49 GMACs to 2.58 GMACs).
-   - Compared to `OfficialMonoDepth2` (8.01 GFLOPs): XiDepthNet reduces compute by **$1.55\times$** (from 4.01 GMACs to 2.58 GMACs).
+   - Against **Official MonoDepth2** (8.01 GMACs): XiDepthNet achieves a **$1.55\times$ MAC reduction** (5.17 vs. 8.01 GMACs).
+   - Against *ResNetDepthNet* (12.98 GMACs): XiDepthNet achieves a **$2.51\times$ MAC reduction** (5.17 vs. 12.98 GMACs).
 
 ---
 
 ### 5.2 Module-Level FLOP & Parameter Breakdown (XiDepthNet)
 
-Fine-grained profiling of XiDepthNet reveals an extreme asymmetry between encoder and decoder compute:
+Fine-grained module profiling reveals that the computational savings of XiDepthNet are almost entirely confined to the encoder:
 
-| Module / Stage | Parameters | GFLOPs | GMACs | % of Total Model Compute |
-| :--- | :---: | :---: | :---: | :---: |
-| **conv1** (Stem) | 0.70 K | 0.021 G | 0.011 G | 0.4% |
-| **stage2** (XiBlocks) | 5.42 K | 0.056 G | 0.028 G | 1.1% |
-| **stage3** (XiBlocks) | 18.91 K | 0.050 G | 0.025 G | 1.0% |
-| **stage4** (XiBlocks) | 70.08 K | 0.047 G | 0.024 G | 0.9% |
-| **stage5** (XiBlocks) | 269.09 K | 0.046 G | 0.023 G | 0.9% |
-| **TOTAL ENCODER** | **0.36 M** | **0.220 G** | **0.110 G** | **4.25%** |
-| **upconv5 + iconv5** ($12\times 40$) | 1.33 M | 0.637 G | 0.319 G | 12.3% |
-| **upconv4 + iconv4** ($24\times 80$) | 0.50 M | 0.955 G | 0.478 G | 18.5% |
-| **upconv3 + iconv3** ($48\times 160$) | 0.12 M | 0.955 G | 0.478 G | 18.5% |
-| **upconv2 + iconv2** ($96\times 320$) | 0.03 M | 0.955 G | 0.478 G | 18.5% |
-| **upconv1 + iconv1 + disp1** ($192\times 640$) | 0.01 M | 1.433 G | 0.717 G | 27.7% |
-| **disp4 + disp3 + disp2** heads | 1.52 K | 0.015 G | 0.007 G | 0.3% |
-| **TOTAL DECODER** | **2.00 M** | **4.949 G** | **2.474 G** | **95.75%** |
-| **TOTAL MODEL** | **2.36 M** | **5.169 G** | **2.584 G** | **100.0%** |
+| Module / Stage | Parameters | GMACs | % of Total Model Compute |
+| :--- | :---: | :---: | :---: |
+| **conv1** (Stem) | 0.70 K | 0.021 G | 0.4% |
+| **stage2** (XiBlocks) | 5.42 K | 0.056 G | 1.1% |
+| **stage3** (XiBlocks) | 18.91 K | 0.050 G | 1.0% |
+| **stage4** (XiBlocks) | 70.08 K | 0.047 G | 0.9% |
+| **stage5** (XiBlocks) | 269.09 K | 0.046 G | 0.9% |
+| **TOTAL ENCODER** | **0.36 M** | **0.220 G** | **4.25%** |
+| **upconv5 + iconv5** ($12\times 40$) | 1.33 M | 0.637 G | 12.3% |
+| **upconv4 + iconv4** ($24\times 80$) | 0.50 M | 0.955 G | 18.5% |
+| **upconv3 + iconv3** ($48\times 160$) | 0.12 M | 0.955 G | 18.5% |
+| **upconv2 + iconv2** ($96\times 320$) | 0.03 M | 0.955 G | 18.5% |
+| **upconv1 + iconv1 + disp1** ($192\times 640$) | 0.01 M | 1.433 G | 27.7% |
+| **disp4 + disp3 + disp2** heads | 1.52 K | 0.015 G | 0.3% |
+| **TOTAL DECODER** | **2.00 M** | **4.949 G** | **95.75%** |
+| **TOTAL MODEL** | **2.36 M** | **5.169 G** | **100.0%** |
 
 #### Convolution Type Breakdown (XiDepthNet):
-- **Depthwise Convolutions** (16 layers): 0.013M parameters, 0.006 GMACs (**0.2% of total MACs**).
-- **Pointwise Convolutions** (28 layers): 0.343M parameters, 0.088 GMACs (**3.4% of total MACs**).
-- **Dense Convolutions** (20 layers, primarily decoder): 1.995M parameters, 2.478 GMACs (**95.9% of total MACs**).
+- **Depthwise Convolutions** (16 layers): 0.013M parameters, 0.012 GMACs (**0.2% of total MACs**).
+- **Pointwise Convolutions** (28 layers): 0.343M parameters, 0.176 GMACs (**3.4% of total MACs**).
+- **Dense Convolutions** (20 layers, primarily decoder): 1.995M parameters, 4.956 GMACs (**95.9% of total MACs**).
 
 ---
 
 ### 5.3 Empirical Latency Benchmarks (Mean ± Std over 100 Runs)
 
-Inference latency was benchmarked on host hardware (**AMD Ryzen 7 7435HS**, 8 Cores / 16 Threads, Batch Size 1, Resolution $192 \times 640$) with 10 warmup iterations:
+Inference latency was benchmarked on host hardware (**AMD Ryzen 7 7435HS**, 8 Cores / 16 Threads, Batch Size 1, Resolution $192 \times 640$) with 15 warmup iterations and 100 timed iterations:
 
 #### Pinned Single-Thread Latency (`torch.set_num_threads(1)`, `OMP_NUM_THREADS=1`, 100 Iterations):
 ```
@@ -223,32 +224,43 @@ Inference latency was benchmarked on host hardware (**AMD Ryzen 7 7435HS**, 8 Co
 ========================================================================================
 Model                  |  Params (DepthNet) |   GMACs |       Latency (Mean ± Std) |    FPS
 ----------------------------------------------------------------------------------------
-ResNetDepthNet         |            14.72 M |  6.49 G |        671.46 ± 50.38 ms   |   1.49
-OfficialMonoDepth2     |            14.33 M |  4.01 G |        372.07 ± 25.99 ms   |   2.69
-XiDepthNet             |             2.36 M |  2.58 G |        306.05 ± 23.04 ms   |   3.27
+OfficialMonoDepth2     |            14.33 M |  8.01 G |        359.73 ± 21.36 ms   |   2.78
+XiDepthNet             |             2.36 M |  5.17 G |        308.61 ± 20.32 ms   |   3.24
+ResNetDepthNet         |            14.72 M | 12.98 G |        622.53 ± 31.32 ms   |   1.61
 ========================================================================================
 ```
 
-#### Multi-Thread Latency (All 16 Threads, Batch Size 1):
-- **XiDepthNet:** $108.46\text{ ms}$ (9.22 FPS)
-- **ResNetDepthNet:** $198.90\text{ ms}$ (5.03 FPS)
+#### Multi-Thread Latency (All 16 Host Threads, 100 Iterations):
+```
+========================================================================================
+ Multi-Thread CPU Latency (AMD Ryzen 7 7435HS, 16 Threads, 100 Runs, Mean ± Std)
+========================================================================================
+Model                  |  Params (DepthNet) |   GMACs |       Latency (Mean ± Std) |    FPS
+----------------------------------------------------------------------------------------
+OfficialMonoDepth2     |            14.33 M |  8.01 G |        132.45 ± 63.79 ms   |   7.55
+XiDepthNet             |             2.36 M |  5.17 G |        127.90 ± 40.30 ms   |   7.82
+ResNetDepthNet         |            14.72 M | 12.98 G |        206.80 ± 25.16 ms   |   4.84
+========================================================================================
+```
 
 ---
 
-### 5.4 Compute vs. Memory-Bandwidth Analysis: The Measured Facts
+### 5.4 Compute vs. Latency Analysis: The Real Architectural Bottleneck
 
-1. **Rejection of Premature Memory-Bandwidth Hypotheses:**
-   - Previous hypotheses attributed the gap between parameter reduction (6.2×) and speedup (~1.8–2.2×) to "memory-bandwidth bottlenecks in depthwise convolutions and channel shuffles".
-   - Empirical profiling directly refutes this: tensor concatenations and channel shuffles account for **$\le 0.3\%$ of total runtime**, and depthwise convolutions represent only **0.2% of total MACs**.
-2. **Compute Dominates Latency:**
-   - Comparing XiDepthNet to ResNetDepthNet, GMACs fell **$2.51\times$** (6.49 to 2.58 GMACs), while single-thread latency fell **$2.19\times$** (671.5 to 306.1 ms) and multi-thread latency fell **$1.83\times$** (198.9 to 108.5 ms).
-   - The gap between GMAC reduction ($2.51\times$) and latency reduction ($2.19\times$) is only **$\sim 1.15\times$** (cause under investigation).
-3. **The Real Architectural Bottleneck: The High-Resolution Decoder:**
-   - XiBlock compressed the encoder from 4.45 GFLOPs down to 0.22 GFLOPs—a **$20.2\times$ reduction** in encoder compute.
-   - However, the UNet decoder was left as dense $3\times 3$ convolutions operating at $1/2$ and full spatial resolutions ($96\times 320$ and $192\times 640$).
-   - Consequently, **the decoder accounts for 95.8% of XiDepthNet's total compute and runtime**. The encoder is no longer the computational bottleneck; any further efficiency optimization must target the decoder.
-4. **Hardware Specificity:**
-   - Reaching 9.22 FPS requires multi-threaded execution utilizing all 16 threads of a Ryzen 7 7435HS host CPU. On single thread, throughput is 3.27 FPS. Embedded edge devices (such as Raspberry Pi 4/5 or Jetson CPUs) will experience proportionally lower throughput.
+1. **Comparison vs. Real Baseline (Official MonoDepth2):**
+   - XiDepthNet reduces parameter count by **$6.1\times$** (2.36M vs. 14.33M).
+   - However, compute drops by only **$1.55\times$** (5.17 vs. 8.01 GMACs).
+   - Single-thread latency drops by only **$1.17\times$** ($308.61\text{ ms}$ vs. $359.73\text{ ms}$).
+   - Multi-thread latency is virtually identical ($127.90\text{ ms}$ vs. $132.45\text{ ms}$, a ~3.4% difference that is within the ±40–64 ms standard deviation).
+2. **The Decoder is the Real Cost:**
+   - XiDepthNet's encoder is $20.2\times$ cheaper than ResNet-18 (0.22 GMACs vs. 4.45 GMACs).
+   - However, XiDepthNet's decoder costs **4.95 GMACs**, which is **39% heavier than Official MonoDepth2's decoder (3.56 GMACs)**!
+   - Because the UNet decoder operates with dense $3\times 3$ convolutions at high resolutions ($192\times 640$ and $96\times 320$), it accounts for **95.8% of XiDepthNet's total compute**.
+   - Any architectural modification targeting the encoder (like XiBlock) can at most influence 4.2% of the compute. Further speedups require redesigning the decoder.
+3. **Rejection of Memory-Bandwidth Hypotheses:**
+   - Previous claims of memory-bandwidth bottlenecks in depthwise convolutions or channel shuffles are ungrounded: depthwise convolutions are only 0.2% of MACs, and tensor concatenations and channel shuffles take $\le 0.3\%$ of execution time.
+4. **Latency Variance:**
+   - Run-to-run standard deviation is $\pm 20\text{ ms}$ single-thread and $\pm 40-64\text{ ms}$ multi-thread. Latency differences under ~10% are within noise margins and cannot be interpreted as significant.
 
 ---
 
@@ -262,14 +274,14 @@ In `utils/health.py`, the training loop is instrumented with an automated collap
 - Includes `state_dict()` and `load_state_dict()` serialization to preserve health state across training resumes.
 
 ### Test-Driven Verification
-Before any cloud training is launched, a comprehensive suite of **29 unit tests** passes locally (`tests/`):
-- Model forward pass shapes and scale alignments across all heads (`test_models.py`).
+Before any cloud training is launched, a comprehensive suite of **31 unit tests** passes locally (`tests/`):
+- Model forward pass shapes, multi-scale training output, and eval output shapes across all models including `OfficialMonodepth2` (`test_models.py`).
 - Metric depth calibration boundaries ($7.0\text{m} \le D_{init} \le 11.0\text{m}$).
 - Identity projection and 3D coordinate transformation consistency (`test_geometry.py`).
 - Differentiable SSIM, minimum reprojection loss, and scale-invariant smoothness (`test_loss.py`).
 - Complete Eigen-Zhou dataset loader checks, right-camera index/intrinsics mapping, and missing file hard assertions (`test_dataset.py`).
 - Evaluation metric correctness, split consistency assertions, and post-process parity (`test_eval.py`).
-- Training loop state restoration (`--resume` roundtrip preserving optimizer, scaler, health step, and best-val) and `--posenet_pretrained` CLI flag verification (`test_train.py`).
+- Training loop state restoration (`--resume` roundtrip preserving optimizer, scaler, health step, and best-val), `--posenet_pretrained` CLI flag verification, and Trainer initialization of `OfficialMonodepth2` (`test_train.py`).
 
 ---
 

@@ -115,3 +115,19 @@ class TestTrainResume:
             assert parsed.posenet_pretrained is True
         finally:
             sys.argv = sys_argv_bak
+
+    def test_train_monodepth2_model_initialization_and_forward(self):
+        from models import OfficialMonodepth2
+        args = self._get_base_args(checkpoint_dir=self.temp_dir)
+        args.model = "monodepth2"
+        trainer = Trainer(args)
+        assert isinstance(trainer.depth_net, OfficialMonodepth2)
+
+        # Run forward pass through depth_net in training mode
+        trainer.depth_net.train()
+        x = torch.randn(2, 3, 192, 640)
+        outputs = trainer.depth_net(x)
+        assert isinstance(outputs, list)
+        assert len(outputs) == 4
+        assert outputs[0].shape == (2, 1, 192, 640)
+

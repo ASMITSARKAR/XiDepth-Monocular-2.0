@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from config import ModelConfig, TrainingConfig, DatasetConfig
 from data.kitti_raw_dataset import KITTIRawDataset
-from models import XiDepthNet, ResNetDepthNet, PoseNet, disp_to_depth
+from models import XiDepthNet, ResNetDepthNet, OfficialMonodepth2, PoseNet, disp_to_depth
 from utils.geometry import BackprojectDepth, Project3D, transformation_from_parameters
 from utils.loss import compute_reprojection_loss, compute_smoothness_loss
 from utils.health import DisparityHealthMonitor
@@ -30,7 +30,13 @@ class Trainer:
         print(f"Training on device: {self.device}")
 
         # Model setup
-        if args.model == "xidepth":
+        if args.model in ("monodepth2", "official_monodepth2"):
+            self.depth_net = OfficialMonodepth2(
+                num_scales=args.num_scales,
+                pretrained=args.pretrained,
+                bias_init=args.disp_bias_init,
+            )
+        elif args.model == "xidepth":
             self.depth_net = XiDepthNet(num_scales=args.num_scales, bias_init=args.disp_bias_init)
         elif args.model == "resnet18":
             self.depth_net = ResNetDepthNet(
@@ -334,7 +340,13 @@ class Trainer:
 
 def get_args():
     parser = argparse.ArgumentParser(description="XiDepth v2.0 Training Pipeline")
-    parser.add_argument("--model", type=str, default="xidepth", choices=["xidepth", "resnet18"])
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="monodepth2",
+        choices=["monodepth2", "official_monodepth2", "xidepth", "resnet18"],
+        help="Depth network: monodepth2 (Official baseline, 8.01 GMACs), xidepth (XiDepthNet, 5.17 GMACs), or resnet18 (ResNetDepthNet, 12.98 GMACs)",
+    )
     parser.add_argument("--pretrained", action="store_true", default=False, help="Use ImageNet pretrained weights for DepthNet")
     parser.add_argument("--posenet_pretrained", action="store_true", default=True, help="ImageNet pretrained weights for PoseNet (default: True across all tracks)")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth to resume from")

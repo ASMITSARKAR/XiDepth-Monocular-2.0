@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,19 +23,16 @@ def get_conv_type(m: nn.Conv2d):
         return "dense"
 
 
-def profile_module_breakdown(model_name: str, model: nn.Module, input_tensor: torch.Tensor, num_runs: int = 100):
+def benchmark_model(model: nn.Module, input_tensor: torch.Tensor, num_threads: int, num_runs: int = 100):
+    torch.set_num_threads(num_threads)
     model.eval()
-    print(f"\n{'='*80}\n MODULE-LEVEL PROFILING: {model_name}\n{'='*80}")
 
-    # Pinned single-thread execution
-    torch.set_num_threads(1)
-
-    # 1. Warmup
+    # Warmup
     with torch.no_grad():
         for _ in range(15):
             _ = model(input_tensor)
 
-    # 2. Overall Latency (Mean +- Std over 100 runs)
+    # Timed runs
     latencies = []
     with torch.no_grad():
         for _ in range(num_runs):
@@ -43,82 +41,89 @@ def profile_module_breakdown(model_name: str, model: nn.Module, input_tensor: to
             t1 = time.perf_counter()
             latencies.append((t1 - t0) * 1000.0)
 
-    lat_mean = np.mean(latencies)
-    lat_std = np.std(latencies)
-    fps = 1000.0 / lat_mean
+    mean_lat = float(np.mean(latencies))
+    std_lat = float(np.std(latencies))
+    fps = 1000.0 / mean_lat
+    return mean_lat, std_lat, fps
 
-    # 3. FlopCountAnalysis from fvcore
+
+def analyze_model_macs(model: nn.Module, input_tensor: torch.Tensor):
+    model.eval()
     flops = FlopCountAnalysis(model, input_tensor)
-    total_flops = flops.total()
-    total_gmacs = total_flops / (2.0 * 1e9)  # 1 MAC = 2 FLOPs
+    total_macs = flops.total()  # fvcore counts multiply-accumulates (MACs)
+    total_gmacs = total_macs / 1e9
 
-    # 4. Conv category breakdown (depthwise, pointwise, dense)
-    conv_stats = {"depthwise": {"macs": 0, "params": 0, "count": 0},
-                  "pointwise": {"macs": 0, "params": 0, "count": 0},
-                  "dense":     {"macs": 0, "params": 0, "count": 0}}
+    conv_stats = {
+        "depthwise": {"macs": 0, "params": 0, "count": 0},
+        "pointwise": {"macs": 0, "params": 0, "count": 0},
+        "dense":     {"macs": 0, "params": 0, "count": 0}
+    }
 
     for name, m in model.named_modules():
         if isinstance(m, nn.Conv2d):
             ctype = get_conv_type(m)
             m_params = sum(p.numel() for p in m.parameters())
-            # Compute MACs using hook or module flop
-            # fvcore flop for this module:
-            m_flops = flops.by_module().get(name, 0)
-            m_macs = m_flops / 2.0
+            m_macs = flops.by_module().get(name, 0)
             conv_stats[ctype]["macs"] += m_macs
             conv_stats[ctype]["params"] += m_params
             conv_stats[ctype]["count"] += 1
 
-    print(f"Overall Latency (100 runs, 1 thread): {lat_mean:.2f} ± {lat_std:.2f} ms ({fps:.2f} FPS)")
-    print(f"Total Model Complexity: {total_gmacs:.3f} GMACs ({total_flops / 1e9:.3f} GFLOPs)")
-    print(f"Total Parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.3f} M")
-
-    print("\n--- Convolution Type Breakdown ---")
-    print(f"{'Type':<12} | {'Count':>6} | {'Params (M)':>12} | {'GMACs':>10} | {'% of MACs':>10}")
-    print("-" * 60)
-    for ctype, st in conv_stats.items():
-        gmac = st["macs"] / 1e9
-        pct = (st["macs"] / (total_flops / 2.0)) * 100 if total_flops > 0 else 0
-        print(f"{ctype:<12} | {st['count']:>6} | {st['params']/1e6:>12.3f} | {gmac:>10.3f} | {pct:>9.1f}%")
-
-    # 5. Encoder vs Decoder Breakdown
-    enc_flops = 0
-    dec_flops = 0
-    head_flops = 0
-
-    for mod_name, mod_flop in flops.by_module().items():
-        # Check top-level submodule
-        top = mod_name.split(".")[0]
-        if top in ["conv1", "stage2", "stage3", "stage4", "stage5", "encoder"]:
-            enc_flops += mod_flop
-        elif top in ["upconv1", "upconv2", "upconv3", "upconv4", "upconv5", "iconv1", "iconv2", "iconv3", "iconv4", "iconv5", "decoder"]:
-            dec_flops += mod_flop
-        elif top in ["disp1", "disp2", "disp3", "disp4"]:
-            head_flops += mod_flop
-
-    # Note: by_module includes nested modules, so we use top-level by_module_and_operator or direct children
-    top_breakdown = {}
-    for name, child in model.named_children():
-        child_flops = FlopCountAnalysis(child, input_tensor).total() if name in ["conv1", "encoder"] else None
-    
-    return {
-        "lat_mean": lat_mean,
-        "lat_std": lat_std,
-        "fps": fps,
-        "total_gmacs": total_gmacs,
-        "conv_stats": conv_stats,
-    }
+    total_params = sum(p.numel() for p in model.parameters()) / 1e6
+    return total_gmacs, total_params, conv_stats
 
 
 def main():
     dummy = torch.randn(1, 3, 192, 640)
-    xi = XiDepthNet(num_scales=4)
-    res = ResNetDepthNet(num_scales=4, pretrained=False)
-    off = OfficialMonodepth2()
+    models_dict = {
+        "OfficialMonodepth2": OfficialMonodepth2(num_scales=4, pretrained=False),
+        "XiDepthNet": XiDepthNet(num_scales=4),
+        "ResNetDepthNet": ResNetDepthNet(num_scales=4, pretrained=False),
+    }
 
-    profile_module_breakdown("XiDepthNet", xi, dummy, num_runs=100)
-    profile_module_breakdown("ResNetDepthNet", res, dummy, num_runs=100)
-    profile_module_breakdown("OfficialMonodepth2", off, dummy, num_runs=100)
+    results = {}
+
+    print("=" * 80)
+    print(" 100-RUN EMPIRICAL BENCHMARK (Mean ± Std over 100 Runs, Batch Size 1, 192x640)")
+    print("=" * 80)
+
+    # 1. Complexity (GMACs & Params)
+    for name, model in models_dict.items():
+        gmacs, params, conv_stats = analyze_model_macs(model, dummy)
+        results[name] = {"gmacs": gmacs, "params": params, "conv_stats": conv_stats}
+
+    # 2. Single-Thread Latency (Pinned 1 Thread)
+    print("\n--- Running Single-Thread Benchmark (1 Thread, 100 Runs) ---")
+    for name, model in models_dict.items():
+        mean_lat, std_lat, fps = benchmark_model(model, dummy, num_threads=1, num_runs=100)
+        results[name]["st_mean"] = mean_lat
+        results[name]["st_std"] = std_lat
+        results[name]["st_fps"] = fps
+        print(f"  {name:<20}: {mean_lat:6.2f} ± {std_lat:5.2f} ms ({fps:5.2f} FPS)")
+
+    # 3. Multi-Thread Latency (All Host Threads)
+    max_threads = torch.get_num_threads()
+    # In PyTorch on this host, default is 16
+    host_threads = os.cpu_count() or 16
+    print(f"\n--- Running Multi-Thread Benchmark ({host_threads} Threads, 100 Runs) ---")
+    for name, model in models_dict.items():
+        mean_lat, std_lat, fps = benchmark_model(model, dummy, num_threads=host_threads, num_runs=100)
+        results[name]["mt_mean"] = mean_lat
+        results[name]["mt_std"] = std_lat
+        results[name]["mt_fps"] = fps
+        print(f"  {name:<20}: {mean_lat:6.2f} ± {std_lat:5.2f} ms ({fps:5.2f} FPS)")
+
+    # Print markdown table
+    print("\n" + "=" * 80)
+    print(" FINAL SUMMARY TABLE")
+    print("=" * 80)
+    print("| Architecture | Params | GMACs | Single-Thread (1 Thread, 100 runs) | Multi-Thread (16 Threads, 100 runs) |")
+    print("| :--- | :---: | :---: | :---: | :---: |")
+    for name, r in results.items():
+        print(
+            f"| **{name}** | {r['params']:.2f} M | {r['gmacs']:.2f} G | "
+            f"{r['st_mean']:.1f} ± {r['st_std']:.1f} ms ({r['st_fps']:.2f} FPS) | "
+            f"{r['mt_mean']:.1f} ± {r['mt_std']:.1f} ms ({r['mt_fps']:.2f} FPS) |"
+        )
 
 
 if __name__ == "__main__":

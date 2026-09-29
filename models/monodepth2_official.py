@@ -39,7 +39,8 @@ class OfficialResnetEncoder(nn.Module):
         assert num_layers == 18, "Only ResNet-18 supported for official weights"
         self.num_ch_enc = [64, 64, 128, 256, 512]
 
-        resnet = models.resnet18(weights=None)
+        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        resnet = models.resnet18(weights=weights)
         self.encoder = nn.Module()
         self.encoder.conv1 = resnet.conv1
         self.encoder.bn1 = resnet.bn1
@@ -65,7 +66,7 @@ class OfficialResnetEncoder(nn.Module):
 
 class OfficialDepthDecoder(nn.Module):
     """Official Monodepth2 Depth Decoder with skip connections."""
-    def __init__(self, num_ch_enc: List[int] = [64, 64, 128, 256, 512], scales: range = range(4)):
+    def __init__(self, num_ch_enc: List[int] = [64, 64, 128, 256, 512], scales: range = range(4), bias_init: float = None):
         super().__init__()
         self.num_output_channels = 1
         self.use_skips = True
@@ -87,6 +88,8 @@ class OfficialDepthDecoder(nn.Module):
 
         for s in self.scales:
             self.convs[("dispconv", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
+            if bias_init is not None:
+                nn.init.constant_(self.convs[("dispconv", s)].conv.bias, bias_init)
 
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
@@ -107,11 +110,12 @@ class OfficialDepthDecoder(nn.Module):
 
 
 class OfficialMonodepth2(nn.Module):
-    """Complete official Monodepth2 model wrapper."""
-    def __init__(self):
+    """Complete official Monodepth2 model wrapper supporting training and inference."""
+    def __init__(self, num_scales: int = 4, pretrained: bool = False, bias_init: float = None):
         super().__init__()
-        self.encoder = OfficialResnetEncoder(18, pretrained=False)
-        self.decoder = OfficialDepthDecoder(self.encoder.num_ch_enc)
+        self.num_scales = num_scales
+        self.encoder = OfficialResnetEncoder(18, pretrained=pretrained)
+        self.decoder = OfficialDepthDecoder(self.encoder.num_ch_enc, scales=range(num_scales), bias_init=bias_init)
 
     def load_pretrained(self, encoder_path: str, decoder_path: str):
         enc_dict = torch.load(encoder_path, map_location="cpu")
@@ -124,7 +128,10 @@ class OfficialMonodepth2(nn.Module):
         # Load decoder weights
         self.decoder.load_state_dict(dec_dict)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Union[List[torch.Tensor], torch.Tensor]:
         features = self.encoder(x)
         outputs = self.decoder(features)
-        return outputs[("disp", 0)]
+        disps = [outputs[("disp", s)] for s in range(self.num_scales)]
+        if self.training:
+            return disps
+        return disps[0]

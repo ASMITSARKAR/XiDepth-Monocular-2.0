@@ -8,23 +8,25 @@ The project investigates whether a lightweight, depthwise-separable architecture
 
 ## 1. Architectural Overview & Efficiency Benchmark
 
-The repository features a dual-track experimental architecture:
-- **Track 1 (ResNet-18 Baseline):** 14.72M parameters (depth network). Standard reference architecture.
-- **Track 2 (XiDepthNet Novel Backbone):** 2.36M parameters (depth network, 6.2x parameter reduction). Uses ShuffleNetV2-inspired XiBlocks with channel split, depthwise-separable convolutions, and channel shuffling.
+The repository features a principled experimental architecture:
+- **Track 1 (Official MonoDepth2 Baseline):** 14.33M parameters (depth network), 8.01 GMACs. The standard reference architecture from Godard et al. (ICCV 2019) with a 2-conv-per-scale UNet decoder.
+- **Track 1b (From-Scratch Control):** 14.33M parameters, 8.01 GMACs. Identical official architecture trained without ImageNet initialization to establish a fair control group.
+- **Track 2 (XiDepthNet Novel Backbone):** 2.36M parameters (depth network, 6.1x parameter reduction), 5.17 GMACs. Uses ShuffleNetV2-inspired XiBlocks with channel split, depthwise-separable convolutions, and channel shuffling.
 *(Note: Parameter reduction ratio applies strictly to DepthNet; the 12.96M ResNet-18 PoseNet is used during training only and discarded at inference).*
+*(Optional Extra: ResNetDepthNet with a 3-conv-per-scale decoder at 14.72M params / 12.98 GMACs is retained for comparison).*
 
-### Measured Inference Benchmarks (AMD Ryzen 7 7435HS CPU, batch size = 1, resolution = 640x192)
+### Measured Inference Benchmarks (AMD Ryzen 7 7435HS CPU, batch size = 1, resolution = 640x192, 100 runs, mean ± std)
 
-| Architecture | Params (DepthNet) | GMACs / FLOPs | Single-Thread Latency (100 runs, mean ± std) | Single-Thread FPS | Multi-Thread Latency (16 Threads) | Multi-Thread FPS |
+| Architecture | Params (DepthNet) | GMACs | Single-Thread Latency (1 Thread, 100 runs) | Single-Thread FPS | Multi-Thread Latency (16 Threads, 100 runs) | Multi-Thread FPS |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **ResNetDepthNet** (Baseline) | 14.72 M | 6.49 GMACs (12.98 GFLOPs) | 671.5 ± 50.4 ms | 1.49 FPS | 198.9 ms | 5.03 FPS |
-| **Official MonoDepth2** (Reference) | 14.33 M | 4.01 GMACs (8.01 GFLOPs) | 372.1 ± 26.0 ms | 2.69 FPS | — | — |
-| **XiDepthNet** (Lightweight) | **2.36 M** | **2.58 GMACs (5.17 GFLOPs)** | **306.1 ± 23.0 ms** | **3.27 FPS** | **108.5 ms** | **9.22 FPS** |
+| **Official MonoDepth2** (Baseline) | 14.33 M | 8.01 G | 359.7 ± 21.4 ms | 2.78 FPS | 132.5 ± 63.8 ms | 7.55 FPS |
+| **XiDepthNet** (Novel) | **2.36 M** | **5.17 G** | **308.6 ± 20.3 ms** | **3.24 FPS** | **127.9 ± 40.3 ms** | **7.82 FPS** |
+| *ResNetDepthNet* (Heavy Decoder) | 14.72 M | 12.98 G | 622.5 ± 31.3 ms | 1.61 FPS | 206.8 ± 25.2 ms | 4.84 FPS |
 
 *Compute vs. Latency Analysis:*
-- Relative to ResNetDepthNet, XiDepthNet achieves a **2.51× GMAC reduction** and a **2.19× single-thread latency reduction** (1.83× multi-thread), leaving only a ~1.15× gap between compute reduction and latency reduction (cause under investigation).
-- Module-level profiling reveals that **the UNet decoder accounts for 95.8% of XiDepthNet's total compute** (2.48 of 2.58 GMACs), running dense 3×3 convolutions at high spatial resolutions. Depthwise convolutions account for only 0.2% of MACs, and channel shuffle / tensor concatenations account for ≤0.3% of execution time.
-- Embedded edge processors (such as Raspberry Pi or Jetson CPU cores) will experience substantially lower throughput than the host AMD Ryzen 7 7435HS.
+- **Headline Comparison vs. Official MonoDepth2:** XiDepthNet achieves **1.55× fewer MACs** (5.17 vs. 8.01 GMACs) and is **1.17–1.22× faster** on single-thread CPU (308.6 ms vs. 359.7 ms). On multi-thread CPU, latency is essentially parity (127.9 ms vs. 132.5 ms, a ~3.4% difference that is within the ±40–64 ms run-to-run standard deviation).
+- **The Dominant Bottleneck — The Decoder:** Fine-grained module profiling reveals that **the UNet decoder accounts for 95.8% of XiDepthNet's total MACs (4.95 of 5.17 GMACs)**. In fact, XiDepthNet's decoder is **39% heavier than Official MonoDepth2's decoder (4.95 vs. 3.56 GMACs)**. All computational savings originate in the encoder (0.22 vs. 4.45 GMACs, a 20.2× reduction), while the high-resolution decoder remains the dominant computational bottleneck.
+- **Micro-Op Overhead:** Depthwise convolutions account for only 0.2% of MACs, and channel shuffle / tensor concatenations consume ≤0.3% of runtime. Embedded edge processors will experience significantly lower frame rates.
 
 ---
 

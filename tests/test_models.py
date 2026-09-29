@@ -57,5 +57,25 @@ def test_posenet_shapes():
 
     assert axisangle.shape == (2, 1, 1, 3)
     assert translation.shape == (2, 1, 1, 3)
-    # Small initial translation scale
     assert torch.abs(translation).max() < 0.1
+
+
+def test_official_monodepth2_shapes():
+    from models import OfficialMonodepth2
+    model = OfficialMonodepth2(num_scales=4, pretrained=False)
+    model.train()
+    x = torch.randn(2, 3, 192, 640)
+    outputs = model(x)
+
+    assert isinstance(outputs, list)
+    assert len(outputs) == 4
+    assert outputs[0].shape == (2, 1, 192, 640)
+    assert outputs[1].shape == (2, 1, 96, 320)
+    assert outputs[2].shape == (2, 1, 48, 160)
+    assert outputs[3].shape == (2, 1, 24, 80)
+
+    model.eval()
+    with torch.no_grad():
+        out_eval = model(x)
+    assert out_eval.shape == (2, 1, 192, 640)
+
