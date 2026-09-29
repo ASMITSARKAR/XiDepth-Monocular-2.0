@@ -21,26 +21,22 @@ This report documents the forensic root-cause analysis of these failures and det
 
 ## 2. Forensic Root-Cause Analysis of v1 Failures
 
-### 2.1 The Static Object Dataset Trap
+### 2.1 The Static Object Dataset Trap and Hypothesis Status
 Self-supervised depth learning relies on rigid-body temporal geometry between consecutive frames:
 $$I_{s \to t} = I_s \left\langle \text{proj}\left( K, T_{t \to s}, D_t, K^{-1} \right) \right\rangle$$
 
 This formulation fundamentally requires temporal continuity: frame $t-1$, frame $t$, and frame $t+1$ must observe the same physical 3D scene from slightly translated camera viewpoints.
 
-In v1, the dataset loader contained an auto-discovery routine:
-```python
-# v1 kitti_dataset.py snippet
-patterns = [
-    os.path.join(self.data_path, "data_object_image_2", "training", "image_2", "*.png"),
-    ...
-]
-```
-When running on Kaggle, the notebook attached `klemenko/kitti-dataset`, which is the **KITTI Object Detection benchmark**. In KITTI Object Detection:
+In v1, an automated fallback mechanism inadvertently ingested non-sequential frames from the **KITTI Object Detection benchmark** (`klemenko/kitti-dataset`) instead of continuous video sequences from **KITTI Raw**. In KITTI Object Detection:
 - `000001.png` is an urban street with parked cars.
 - `000002.png` is an intersection with a cyclist.
 - `000003.png` is an open highway.
 
-By treating `frame_idx - 1` and `frame_idx + 1` as temporal neighbors, the loss function attempted to warp an urban street into a cyclist and highway. Because no physical transformation $T \in SE(3)$ can warp completely distinct scenes into each other, the photometric reprojection error exploded, producing chaotic gradients that permanently disabled the depth decoder.
+By treating `frame_idx - 1` and `frame_idx + 1` as temporal neighbors, the loss function attempted to warp an urban street into a cyclist and highway. Because no physical transformation $T \in SE(3)$ can warp completely distinct scenes into each other, the photometric reprojection error exploded, producing chaotic gradients that permanently collapsed the depth decoder into a uniform ~1.3m sheet.
+
+> [!IMPORTANT]
+> **Status of Hypothesized Root Causes:**
+> The collapse to a constant ~1.3m flat sheet is definitively confirmed for static images (under median scaling, a constant map yields AbsRel $\approx 0.41$, exactly matching the observed failure signature). Secondary hypothesized root causes (e.g., smoothness loss weighting, auto-masking thresholding, depth bounding) remain **unverified hypotheses** because v1 ran on an invalid dataset. All proposed algorithmic fixes (normalized smoothness, proper disparity bias initialization, auto-masking normalization) will only be considered scientifically validated after completing a real v2 training run on KITTI Raw.
 
 ### 2.2 Disparity Bias Arithmetic Collapse
 The disparity-to-depth mapping used across both versions is:
@@ -118,7 +114,9 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
             └──────────────────┬──────────────────┘
                                ▼
                    Identical Training Setup:
-            - 20 Epochs, Batch Size 12, LR 1e-4
+            - Dataset: Official Eigen-Zhou (39,810 train: 19,956 L / 19,854 R; 4,424 val)
+            - 20 Epochs, Batch Size 12 (3,318 steps/epoch, 66,360 total steps)
+            - 1,000-step Warmup (0.30 epochs)
             - Mixed Precision (AMP FP16)
             - Auto-Masking + Multi-Scale Reprojection
             - Health Monitor Collapse Guard
@@ -126,36 +124,22 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
                    Eigen Benchmark Evaluation
 ```
 
-### Comparative Target Benchmark
+### Benchmark Reference (Ground Truth Sourced)
 
-| Architecture | Backbone | Parameters | Abs Rel (lower) | Sq Rel (lower) | RMSE (lower) | d < 1.25 (higher) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **MonoDepth2** (Godard et al.) | ResNet-18 | 14.3 M | 0.115 | 0.903 | 4.863 | 0.877 |
-| **XiDepth v2 Track 1** (Baseline) | ResNet-18 | 14.7 M | 0.118 | 0.920 | 4.950 | 0.870 |
-| **XiDepth v2 Track 2** (Lightweight) | XiBlock | **2.36 M** | **0.132** | **1.050** | **5.320** | **0.845** |
+| Architecture | Backbone | Parameters | Abs Rel (Raw 697, Garg crop) | Abs Rel (Improved 652, Benchmark) | Sq Rel | RMSE | $\delta < 1.25$ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **MonoDepth2 (Godard et al.)** | ResNet-18 | 14.3 M | 0.115 | 0.090 | 0.903 | 4.863 | 0.877 |
+| **XiDepth v2 Track 1 (Pretrained)** | ResNet-18 | 14.7 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
+| **XiDepth v2 Track 1b (From-Scratch)** | ResNet-18 | 14.7 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
+| **XiDepth v2 Track 2 (Lightweight)** | XiBlock | 2.36 M | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* | *Pending Run* |
 
-An AbsRel of ~0.132 with only 2.36M parameters represents a competitive balance for embedded edge computing.
+*Note on Evaluation Protocol:* Post-processing is disabled by default for baseline comparisons. When evaluating against improved ground truth (652 frames), evaluation is performed over all valid pixels without cropping ($10^{-3} < d < 80\,\text{m}$); when evaluating against raw LiDAR (697 frames), the standard Garg crop is applied.
 
 ---
 
-## 5. Local Hardware Empirical Benchmarks
+## 5. Hardware Benchmarks
 
-The inference scripts were directly benchmarked on local consumer hardware (AMD Ryzen 7 CPU, single thread batch=1, resolution $192 \times 640$):
-
-```
-======================================================================
- Inference Latency & Efficiency Comparison (Local AMD Ryzen 7 CPU)
-======================================================================
-Model              |   Params |  Mean Latency |  P95 Latency |      FPS
-----------------------------------------------------------------------
-XiDepthNet         |    2.36M |     100.88 ms |    119.15 ms |     9.91
-ResNetDepthNet     |   14.72M |     193.24 ms |    208.09 ms |     5.18
-======================================================================
-```
-
-**Key Findings:**
-- XiDepthNet achieves **9.91 FPS** on standard CPU, nearing real-time edge processing (10 Hz).
-- XiDepthNet is **1.92x faster** and **6.2x smaller** in parameters than ResNet-18.
+*Hardware latency, FLOPs, and FPS will be populated after empirical measurement on target hardware using `scripts/infer.py`.*
 
 ---
 

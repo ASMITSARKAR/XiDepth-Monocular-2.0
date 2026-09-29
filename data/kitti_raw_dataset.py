@@ -71,45 +71,46 @@ class KITTIRawDataset(Dataset):
             if os.path.isfile(path):
                 return path
 
-        # Default fallback path
-        return candidates[0]
+        raise FileNotFoundError(
+            f"Frame {frame_name} in folder {folder} (side {side}, camera {cam_dir}) not found under {self.data_path}"
+        )
 
     def _load_image(self, path: str) -> Image.Image:
         if not os.path.isfile(path):
-            # Fallback placeholder image for testing when offline
-            return Image.new("RGB", (1242, 375), color=(128, 128, 128))
+            raise FileNotFoundError(f"Image not found at {path}")
         return Image.open(path).convert("RGB")
 
-    def _get_intrinsics(self, folder: str, orig_w: int, orig_h: int) -> np.ndarray:
+    def _get_intrinsics(self, folder: str, orig_w: int, orig_h: int, side: str = "l") -> np.ndarray:
         date = folder.split("/")[0] if "/" in folder else folder.split("\\")[0]
-        if date in self._calib_cache:
-            k = self._calib_cache[date].copy()
+        cache_key = f"{date}_{side}"
+        if cache_key in self._calib_cache:
+            k = self._calib_cache[cache_key].copy()
         else:
             calib_file = os.path.join(self.data_path, date, "calib_cam_to_cam.txt")
-            k = self._read_kitti_calib(calib_file)
-            self._calib_cache[date] = k.copy()
+            k = self._read_kitti_calib(calib_file, side=side)
+            self._calib_cache[cache_key] = k.copy()
 
         # Scale K to target network resolution
         k[0, :] *= self.width / orig_w
         k[1, :] *= self.height / orig_h
         return k
 
-    def _read_kitti_calib(self, calib_file: str) -> np.ndarray:
+    def _read_kitti_calib(self, calib_file: str, side: str = "l") -> np.ndarray:
         if not os.path.isfile(calib_file):
-            return self.DEFAULT_K.copy()
+            raise FileNotFoundError(f"Calibration file missing: {calib_file}")
 
-        try:
-            with open(calib_file, "r") as f:
-                for line in f:
-                    if line.startswith("P_rect_02:") or line.startswith("P2:"):
-                        vals = [float(x) for x in line.strip().split()[1:]]
-                        k = np.eye(4, dtype=np.float32)
-                        k[:3, :3] = np.array(vals[:12], dtype=np.float32).reshape(3, 4)[:3, :3]
-                        return k
-        except Exception:
-            pass
+        prefix = "P_rect_02:" if side == "l" else "P_rect_03:"
+        alt_prefix = "P2:" if side == "l" else "P3:"
 
-        return self.DEFAULT_K.copy()
+        with open(calib_file, "r") as f:
+            for line in f:
+                if line.startswith(prefix) or line.startswith(alt_prefix):
+                    vals = [float(x) for x in line.strip().split()[1:]]
+                    k = np.eye(4, dtype=np.float32)
+                    k[:3, :3] = np.array(vals[:12], dtype=np.float32).reshape(3, 4)[:3, :3]
+                    return k
+
+        raise ValueError(f"Could not find projection matrix for camera {side} ({prefix}) in {calib_file}")
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         folder, frame_idx, side = self._parse_line(self.filenames[idx])
@@ -118,8 +119,9 @@ class KITTIRawDataset(Dataset):
         img_0 = self._load_image(self._get_image_path(folder, frame_idx, side))
         orig_w, orig_h = img_0.size
 
-        # Intrinsic matrix
-        k = self._get_intrinsics(folder, orig_w, orig_h)
+        # Intrinsic matrix for specified camera side
+        k = self._get_intrinsics(folder, orig_w, orig_h, side=side)
+
 
         # Horizontal flip augmentation
         do_flip = self.is_train and random.random() > 0.5

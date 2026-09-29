@@ -11,6 +11,8 @@ if str(ROOT_DIR) not in sys.path:
 
 
 def read_calib_file(path: str) -> dict:
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Calibration file missing: {path}")
     data = {}
     with open(path, "r") as f:
         for line in f:
@@ -21,11 +23,10 @@ def read_calib_file(path: str) -> dict:
     return data
 
 
-def sub2ind(matrix_size, row_sub, col_sub):
-    return row_sub * matrix_size[1] + col_sub
-
-
 def generate_depth_map(calib_dir: str, velo_filename: str, cam: int = 2) -> np.ndarray:
+    if not os.path.isfile(velo_filename):
+        raise FileNotFoundError(f"Velodyne scan file missing: {velo_filename}")
+
     cam_to_cam = read_calib_file(os.path.join(calib_dir, "calib_cam_to_cam.txt"))
     velo_to_cam = read_calib_file(os.path.join(calib_dir, "calib_velo_to_cam.txt"))
 
@@ -76,10 +77,13 @@ def generate_depth_map(calib_dir: str, velo_filename: str, cam: int = 2) -> np.n
 
 
 def export_eigen_gt(kitti_dir: str, split_file: str, output_path: str):
+    if not os.path.isfile(split_file):
+        raise FileNotFoundError(f"Split file missing: {split_file}")
+
     with open(split_file, "r") as f:
         lines = [l.strip() for l in f if l.strip()]
 
-    print(f"Exporting ground truth depth maps for {len(lines)} test frames...")
+    print(f"Exporting ground truth depth maps for {len(lines)} test frames from {split_file}...")
     gt_depths = []
 
     for i, line in enumerate(lines):
@@ -93,14 +97,14 @@ def export_eigen_gt(kitti_dir: str, split_file: str, output_path: str):
         )
         calib_dir = os.path.join(kitti_dir, date)
 
-        if os.path.isfile(velo_file) and os.path.isdir(calib_dir):
-            depth = generate_depth_map(calib_dir, velo_file)
-        else:
-            # Fallback mock depth map when raw velodyne points are not mounted locally
-            depth = np.zeros((375, 1242), dtype=np.float32)
-            depth[180:, :] = 12.0
+        if not os.path.isfile(velo_file):
+            raise FileNotFoundError(f"Velodyne file missing for frame {i} ({folder} frame {frame_idx}): {velo_file}")
+        if not os.path.isdir(calib_dir):
+            raise FileNotFoundError(f"Calibration directory missing for frame {i} ({date}): {calib_dir}")
 
+        depth = generate_depth_map(calib_dir, velo_file)
         gt_depths.append(depth)
+
         if (i + 1) % 100 == 0:
             print(f"Processed [{i+1}/{len(lines)}] frames")
 
@@ -112,8 +116,8 @@ def export_eigen_gt(kitti_dir: str, split_file: str, output_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export KITTI Velodyne LiDAR depth maps for Eigen test split")
     parser.add_argument("--kitti_dir", type=str, default="data/kitti")
-    parser.add_argument("--split_file", type=str, default="data/splits/eigen_zhou/test_files.txt")
-    parser.add_argument("--output_path", type=str, default="data/gt_depths.npz")
+    parser.add_argument("--split_file", type=str, default="data/splits/eigen/test_files.txt", help="Default: eigen 697 test split")
+    parser.add_argument("--output_path", type=str, default="data/gt_depths_raw697.npz", help="Output .npz path")
     args = parser.parse_args()
 
     export_eigen_gt(args.kitti_dir, args.split_file, args.output_path)
