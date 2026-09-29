@@ -239,6 +239,22 @@ def evaluate(args):
             json.dump(results, f, indent=2)
         print(f"Results saved to {args.output_json}")
 
+    # Parity gate enforcement for official Monodepth2
+    if args.model == "monodepth2_official":
+        expected_abs_rel = 0.090 if is_benchmark else 0.115
+        tol = args.gate_tolerance
+        diff = abs(results["abs_rel"] - expected_abs_rel)
+        if diff > tol:
+            print("\n" + "!" * 70)
+            print(f" [PARITY GATE FAILED] Official Monodepth2 AbsRel={results['abs_rel']:.4f} "
+                  f"deviated from target {expected_abs_rel:.4f} by {diff:.4f} (tolerance: {tol:.4f})!")
+            print(" Halting execution. Debug the evaluation pipeline before proceeding to training.")
+            print("!" * 70 + "\n")
+            sys.exit(1)
+        else:
+            print(f"\n[PARITY GATE PASSED] Official Monodepth2 AbsRel={results['abs_rel']:.4f} "
+                  f"matches target {expected_abs_rel:.4f} within tolerance {tol:.4f}.\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate XiDepth models on KITTI Eigen test benchmark")
@@ -248,6 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--split_file", type=str, default="data/splits/eigen_benchmark/test_files.txt")
     parser.add_argument("--gt_path", type=str, default="data/gt_depths.npz")
     parser.add_argument("--output_json", type=str, default=None)
+    parser.add_argument("--gate_tolerance", type=float, default=0.005, help="Parity gate tolerance for official model (default: 0.005)")
 
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=640)

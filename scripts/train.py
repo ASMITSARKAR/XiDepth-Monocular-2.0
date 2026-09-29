@@ -71,6 +71,19 @@ class Trainer:
 
         os.makedirs(args.checkpoint_dir, exist_ok=True)
         self.best_val_loss = float("inf")
+        self.start_epoch = 0
+
+        if args.resume and os.path.isfile(args.resume):
+            print(f"Resuming training from checkpoint: {args.resume}")
+            ckpt = torch.load(args.resume, map_location=self.device)
+            self.depth_net.load_state_dict(ckpt["depth_net"])
+            self.pose_net.load_state_dict(ckpt["pose_net"])
+            if "optimizer" in ckpt and self.optimizer is not None:
+                self.optimizer.load_state_dict(ckpt["optimizer"])
+            if "scheduler" in ckpt and self.scheduler is not None:
+                self.scheduler.load_state_dict(ckpt["scheduler"])
+            self.start_epoch = ckpt.get("epoch", 0) + 1
+            print(f"Resumed from epoch {self.start_epoch}")
 
     def _setup_datasets(self):
         train_file = os.path.join(self.args.split_dir, "train_files.txt")
@@ -276,6 +289,7 @@ class Trainer:
             "depth_net": self.depth_net.state_dict(),
             "pose_net": self.pose_net.state_dict(),
             "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
             "args": vars(self.args),
         }
         ckpt_path = os.path.join(self.args.checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pth")
@@ -287,8 +301,8 @@ class Trainer:
             print(f"Saved new best model checkpoint to {best_path}")
 
     def run(self):
-        print(f"Beginning training {self.args.model} for {self.args.epochs} epochs...")
-        for epoch in range(self.args.epochs):
+        print(f"Beginning training {self.args.model} from epoch {self.start_epoch + 1} to {self.args.epochs}...")
+        for epoch in range(self.start_epoch, self.args.epochs):
             train_loss = self.train_epoch(epoch)
             val_loss = self.validate()
             self.scheduler.step()
@@ -309,7 +323,8 @@ class Trainer:
 def get_args():
     parser = argparse.ArgumentParser(description="XiDepth v2.0 Training Pipeline")
     parser.add_argument("--model", type=str, default="xidepth", choices=["xidepth", "resnet18"])
-    parser.add_argument("--pretrained", action="store_true", default=True)
+    parser.add_argument("--pretrained", action="store_true", default=False, help="Use ImageNet pretrained weights")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth to resume from")
     parser.add_argument("--num_scales", type=int, default=4)
     parser.add_argument("--disp_bias_init", type=float, default=-4.5)
 

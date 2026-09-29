@@ -51,10 +51,14 @@ def main():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--threads", type=int, default=1, help="PyTorch CPU thread count (default: 1)")
     parser.add_argument("--no_cuda", action="store_true", default=False)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+    if device.type == "cpu" and args.threads > 0:
+        torch.set_num_threads(args.threads)
+        print(f"Set PyTorch CPU threads: {args.threads}")
     print(f"Benchmarking on device: {device}")
 
     xi = XiDepthNet(num_scales=4)

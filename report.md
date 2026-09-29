@@ -27,16 +27,15 @@ $$I_{s \to t} = I_s \left\langle \text{proj}\left( K, T_{t \to s}, D_t, K^{-1} \
 
 This formulation fundamentally requires temporal continuity: frame $t-1$, frame $t$, and frame $t+1$ must observe the same physical 3D scene from slightly translated camera viewpoints.
 
-In v1, an automated fallback mechanism inadvertently ingested non-sequential frames from the **KITTI Object Detection benchmark** (`klemenko/kitti-dataset`) instead of continuous video sequences from **KITTI Raw**. In KITTI Object Detection:
-- `000001.png` is an urban street with parked cars.
-- `000002.png` is an intersection with a cyclist.
-- `000003.png` is an open highway.
+In v1, the dataset loader (`data/kitti_dataset.py`) contained an automated fallback routine (`_auto_discover_samples`) that detected directory patterns from the **KITTI Object Detection benchmark** (`data_object_image_2`) instead of continuous video sequences from **KITTI Raw**. In the v1 loader, when `is_kitti_object` was set, temporal neighbors were formed by substituting the simultaneous stereo counterpart (`image_03`) or copying the target image, while in other code paths, adjacent numeric indices were loaded. 
 
-By treating `frame_idx - 1` and `frame_idx + 1` as temporal neighbors, the loss function attempted to warp an urban street into a cyclist and highway. Because no physical transformation $T \in SE(3)$ can warp completely distinct scenes into each other, the photometric reprojection error exploded, producing chaotic gradients that permanently collapsed the depth decoder into a uniform ~1.3m sheet.
+Whether the optimization collapse was triggered primarily by synthetic stereo-for-temporal frame substitutions, discontinuous scene warps, loss weighting, or initialization bias remains a **hypothesis**. What is empirically verified from the training logs is that:
+1. The v1 training run ingested non-sequential frames from the KITTI Object benchmark via the auto-discovery fallback.
+2. The network collapsed into predicting a near-uniform ~1.3m sheet across the scene.
 
 > [!IMPORTANT]
 > **Status of Hypothesized Root Causes:**
-> The collapse to a constant ~1.3m flat sheet is definitively confirmed for static images (under median scaling, a constant map yields AbsRel $\approx 0.41$, exactly matching the observed failure signature). Secondary hypothesized root causes (e.g., smoothness loss weighting, auto-masking thresholding, depth bounding) remain **unverified hypotheses** because v1 ran on an invalid dataset. All proposed algorithmic fixes (normalized smoothness, proper disparity bias initialization, auto-masking normalization) will only be considered scientifically validated after completing a real v2 training run on KITTI Raw.
+> Under median scaling, evaluating a flat constant depth map produces an AbsRel of $\approx 0.41$, which is **consistent with** the observed 0.4562 failure score (minor differences attributable to test subsets, crop boundaries, and evaluation clipping limits). Secondary hypothesized root causes (e.g., smoothness loss weighting, auto-masking thresholding, depth bounding) remain **unverified hypotheses** because v1 ran on an invalid dataset. All proposed algorithmic fixes (normalized smoothness, proper disparity bias initialization, auto-masking normalization) will only be considered scientifically validated after completing a real v2 training run on KITTI Raw.
 
 ### 2.2 Disparity Bias Arithmetic Collapse
 The disparity-to-depth mapping used across both versions is:
@@ -134,9 +133,40 @@ To isolate backbone performance from pipeline correctness, v2 adopts a dual-trac
 
 ---
 
-## 5. Hardware Benchmarks
+## 5. Local Hardware Empirical Benchmarks
 
-*Hardware latency, FLOPs, and FPS will be populated after empirical measurement on target hardware using `scripts/infer.py`.*
+The inference latency was empirically benchmarked on local CPU hardware (**AMD Ryzen 7 7435HS**, 8 Cores / 16 Threads, Batch Size 1, Resolution $192 \times 640$, 10 warmup iterations, using `scripts/infer.py`):
+
+### Multi-Threaded Profile (Default PyTorch Threads, 30 Iterations)
+
+```
+======================================================================
+ Inference Latency & Efficiency Comparison (AMD Ryzen 7 7435HS CPU)
+======================================================================
+Model              |   Params |  Mean Latency |  P95 Latency |      FPS
+----------------------------------------------------------------------
+XiDepthNet         |    2.36M |     108.46 ms |    123.03 ms |     9.22
+ResNetDepthNet     |   14.72M |     198.90 ms |    214.24 ms |     5.03
+======================================================================
+```
+*(Reference from earlier run: XiDepthNet 100.88 ms / 9.91 FPS vs ResNetDepthNet 193.24 ms / 5.18 FPS).*
+
+### Single-Threaded Profile (Forced Single Thread `threads=1`, 50 Iterations)
+
+```
+======================================================================
+ Single-Thread CPU Inference (AMD Ryzen 7 7435HS CPU)
+======================================================================
+Model              |   Params |  Mean Latency |  P95 Latency |      FPS
+----------------------------------------------------------------------
+XiDepthNet         |    2.36M |     321.81 ms |    363.62 ms |     3.11
+ResNetDepthNet     |   14.72M |     651.56 ms |    731.55 ms |     1.53
+======================================================================
+```
+
+**Key Findings:**
+- Under standard multi-threaded CPU execution, XiDepthNet achieves **~9.2–9.9 FPS** (nearing real-time 10 Hz robotic control on standard consumer x86 mobile silicon).
+- XiDepthNet delivers a **1.83×–2.02× speedup** over ResNet-18 while using **6.2× fewer parameters** ($2.36\text{M}$ vs $14.72\text{M}$).
 
 ---
 
