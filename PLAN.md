@@ -19,10 +19,11 @@ For the complete deep-dive engineering audit, mathematical proofs, and infrastru
    - Disparity bias initialization corrected to **`-4.5` to `-4.7`** (maps to ~8.5m - 10m initial depth).
    - Resolves the 10x arithmetic error in the previous draft (`bias=0.0` maps to 0.20m, NOT 2.0m).
 
-3. **Dual Architecture (Option C):**
-   - **Track 1:** ResNet-18 baseline (14.3M params, ~9h on T4) to guarantee pipeline correctness (target AbsRel ~0.118).
-   - **Track 2:** Novel XiBlock backbone (2.36M params, ~7h on T4) for the lightweight ablation study (target AbsRel ~0.132).
-   - Fits well within Kaggle's 30h/week free GPU quota (total compute ~16h).
+3. **Multi-Track Scientific Protocol:**
+   - **Track 1:** Official Monodepth2 baseline (14.33M params, 8.01 GMACs). Must pass the **Pipeline Validation Criterion** (AbsRel <= 0.095 on improved 652 / <= 0.120 on raw 697) to prove pipeline training correctness before Track 2 can run.
+   - **Track 1b:** Monodepth2 from scratch control (14.33M params, 8.01 GMACs, identical -4.5 bias init and pretrained PoseNet).
+   - **Track 2:** Novel XiBlock backbone (2.36M params, 5.17 GMACs) for the lightweight study.
+   - Controlled variables held strictly constant across all tracks: `-4.5` bias init, shared ImageNet-pretrained ResNet-18 PoseNet, $[0.1\text{m}, 100.0\text{m}]$ depth bounds.
 
 4. **Honest Engineering Post-Mortem:**
    - Include v1 failure analysis in `report.md` (synthetic commits, static object dataset trap, bias collapse).

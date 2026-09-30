@@ -27,7 +27,7 @@ def benchmark_model(model: nn.Module, input_tensor: torch.Tensor, num_threads: i
     torch.set_num_threads(num_threads)
     model.eval()
 
-    # Warmup
+    # Warmup (discarded)
     with torch.no_grad():
         for _ in range(15):
             _ = model(input_tensor)
@@ -41,10 +41,20 @@ def benchmark_model(model: nn.Module, input_tensor: torch.Tensor, num_threads: i
             t1 = time.perf_counter()
             latencies.append((t1 - t0) * 1000.0)
 
+    median_lat = float(np.median(latencies))
+    p95_lat = float(np.percentile(latencies, 95))
     mean_lat = float(np.mean(latencies))
     std_lat = float(np.std(latencies))
-    fps = 1000.0 / mean_lat
-    return mean_lat, std_lat, fps
+    fps = 1000.0 / median_lat
+    return {
+        "median": median_lat,
+        "p95": p95_lat,
+        "mean": mean_lat,
+        "std": std_lat,
+        "fps": fps,
+        "min": float(np.min(latencies)),
+        "max": float(np.max(latencies)),
+    }
 
 
 def analyze_model_macs(model: nn.Module, input_tensor: torch.Tensor):
@@ -94,35 +104,31 @@ def main():
     # 2. Single-Thread Latency (Pinned 1 Thread)
     print("\n--- Running Single-Thread Benchmark (1 Thread, 100 Runs) ---")
     for name, model in models_dict.items():
-        mean_lat, std_lat, fps = benchmark_model(model, dummy, num_threads=1, num_runs=100)
-        results[name]["st_mean"] = mean_lat
-        results[name]["st_std"] = std_lat
-        results[name]["st_fps"] = fps
-        print(f"  {name:<20}: {mean_lat:6.2f} ± {std_lat:5.2f} ms ({fps:5.2f} FPS)")
+        bench = benchmark_model(model, dummy, num_threads=1, num_runs=100)
+        results[name]["st"] = bench
+        print(f"  {name:<20}: Median {bench['median']:6.2f} ms | P95 {bench['p95']:6.2f} ms | Mean {bench['mean']:6.2f} ± {bench['std']:5.2f} ms ({bench['fps']:5.2f} FPS)")
 
     # 3. Multi-Thread Latency (All Host Threads)
-    max_threads = torch.get_num_threads()
-    # In PyTorch on this host, default is 16
     host_threads = os.cpu_count() or 16
     print(f"\n--- Running Multi-Thread Benchmark ({host_threads} Threads, 100 Runs) ---")
     for name, model in models_dict.items():
-        mean_lat, std_lat, fps = benchmark_model(model, dummy, num_threads=host_threads, num_runs=100)
-        results[name]["mt_mean"] = mean_lat
-        results[name]["mt_std"] = std_lat
-        results[name]["mt_fps"] = fps
-        print(f"  {name:<20}: {mean_lat:6.2f} ± {std_lat:5.2f} ms ({fps:5.2f} FPS)")
+        bench = benchmark_model(model, dummy, num_threads=host_threads, num_runs=100)
+        results[name]["mt"] = bench
+        print(f"  {name:<20}: Median {bench['median']:6.2f} ms | P95 {bench['p95']:6.2f} ms | Mean {bench['mean']:6.2f} ± {bench['std']:5.2f} ms ({bench['fps']:5.2f} FPS)")
 
     # Print markdown table
-    print("\n" + "=" * 80)
-    print(" FINAL SUMMARY TABLE")
-    print("=" * 80)
-    print("| Architecture | Params | GMACs | Single-Thread (1 Thread, 100 runs) | Multi-Thread (16 Threads, 100 runs) |")
+    print("\n" + "=" * 105)
+    print(" FINAL SUMMARY TABLE (Batch Size 1, 192x640, 100 Runs, 15 Warmup Discarded)")
+    print("=" * 105)
+    print("| Architecture | Params | GMACs | Single-Thread Median (P95) [Mean±Std] | Multi-Thread Median (P95) [Mean±Std] |")
     print("| :--- | :---: | :---: | :---: | :---: |")
     for name, r in results.items():
+        st = r["st"]
+        mt = r["mt"]
         print(
             f"| **{name}** | {r['params']:.2f} M | {r['gmacs']:.2f} G | "
-            f"{r['st_mean']:.1f} ± {r['st_std']:.1f} ms ({r['st_fps']:.2f} FPS) | "
-            f"{r['mt_mean']:.1f} ± {r['mt_std']:.1f} ms ({r['mt_fps']:.2f} FPS) |"
+            f"**{st['median']:.1f} ms** ({st['p95']:.1f} ms) [{st['mean']:.1f}±{st['std']:.1f} ms] | "
+            f"**{mt['median']:.1f} ms** ({mt['p95']:.1f} ms) [{mt['mean']:.1f}±{mt['std']:.1f} ms] |"
         )
 
 
